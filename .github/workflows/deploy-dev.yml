@@ -1,0 +1,51 @@
+name: Deploy DEV
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: delivery-lab-local
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Never execute pull-request or fork code on the local runner.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: [self-hosted, delivery-lab]
+    timeout-minutes: 45
+    env:
+      LAB_HOME: ${{ vars.LAB_HOME }}
+      RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-${{ github.event.workflow_run.head_sha }}
+          path: .download
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Prepare isolated settings
+        run: python3 scripts/lab.py init
+      - name: Install this release once
+        run: python3 scripts/lab.py install --archive .download/release.tar.gz
+      - name: Deploy and verify DEV
+        run: python3 scripts/lab.py deploy --release "$RELEASE_ID" --environment dev
+      - name: Record the deployment summary
+        run: |
+          echo "DEV passed for release $RELEASE_ID." >> "$GITHUB_STEP_SUMMARY"
+          echo 'Open http://localhost:8080 on the runner computer.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Use Promote release to request UAT for this exact release ID.' >> "$GITHUB_STEP_SUMMARY"

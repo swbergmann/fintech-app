@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Test and build React
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend test
+          npm --prefix frontend run build
+      - name: Test and package Java
+        run: ./backend/mvnw -f backend/pom.xml -B -ntp verify
+      - name: Test release promotion rules
+        run: python3 -m unittest discover -s tests -v
+      - name: Package the main-branch release
+        if: github.event_name == 'push'
+        env:
+          RELEASE_ID: ${{ github.sha }}
+        run: python3 scripts/package.py --release "$RELEASE_ID" --output release.tar.gz
+      - name: Store the release
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-${{ github.sha }}
+          path: release.tar.gz
+          retention-days: 30
+          if-no-files-found: error

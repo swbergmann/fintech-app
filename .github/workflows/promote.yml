@@ -1,0 +1,53 @@
+name: Promote release
+run-name: Promote ${{ inputs.release_id }} to ${{ inputs.environment }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [uat, prod]
+        required: true
+      release_id:
+        description: Full 40-character commit SHA from the successful DEV run
+        type: string
+        required: true
+      accept_uat:
+        description: For PROD, I confirm that human user acceptance testing passed
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delivery-lab-local
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, delivery-lab]
+    timeout-minutes: 30
+    # Baseline: the authorized user's manual dispatch is the human release decision.
+    # See docs/github-setup.md for adding a separate, enforced deployment reviewer.
+    env:
+      LAB_HOME: ${{ vars.LAB_HOME }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      TARGET_ENV: ${{ inputs.environment }}
+      ACCEPT_UAT: ${{ inputs.accept_uat }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check approval and promote existing release
+        shell: bash
+        run: |
+          options=()
+          if [[ "$ACCEPT_UAT" == "true" ]]; then options+=(--accept-uat); fi
+          python3 scripts/lab.py deploy --release "$RELEASE_ID" --environment "$TARGET_ENV" "${options[@]}"
+      - name: Record the deployment summary
+        run: echo "$TARGET_ENV passed for release $RELEASE_ID, requested by $GITHUB_ACTOR." >> "$GITHUB_STEP_SUMMARY"

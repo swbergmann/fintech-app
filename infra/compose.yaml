@@ -1,0 +1,67 @@
+services:
+  db:
+    image: container-registry.oracle.com/database/free:23.26.0.0-lite
+    environment:
+      ORACLE_PWD: ${DB_ADMIN_PASSWORD:?Run lab.py init first}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run lab.py init first}
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      - ./init-db.sh:/opt/oracle/scripts/setup/01-create-app.sh:ro
+    shm_size: 1g
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /opt/oracle/oradata/.delivery-lab-ready && /opt/oracle/checkDBStatus.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 90s
+    restart: unless-stopped
+
+  migrate:
+    image: ${BACKEND_IMAGE:?Install a release first}
+    environment:
+      DB_URL: jdbc:oracle:thin:@//db:1521/FREEPDB1
+      DB_USERNAME: APP
+      DB_PASSWORD: ${APP_DB_PASSWORD}
+      DB_MIGRATE: "true"
+      MIGRATE_ONLY: "true"
+      SPRING_MAIN_WEB_APPLICATION_TYPE: none
+    mem_limit: 512m
+    profiles: ["tools"]
+
+  backend:
+    image: ${BACKEND_IMAGE:?Install a release first}
+    environment:
+      DB_URL: jdbc:oracle:thin:@//db:1521/FREEPDB1
+      DB_USERNAME: APP
+      DB_PASSWORD: ${APP_DB_PASSWORD}
+      DB_MIGRATE: "false"
+      APP_ENV: ${APP_ENV}
+      RELEASE_ID: ${RELEASE_ID}
+    depends_on:
+      db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 512m
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?Install a release first}
+    ports:
+      - "127.0.0.1:${HTTP_PORT}:80"
+    depends_on:
+      backend: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/release.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    mem_limit: 128m
+    restart: unless-stopped
+
+volumes:
+  oracle-data:

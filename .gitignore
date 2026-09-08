@@ -1,0 +1,14 @@
+node_modules/
+dist/
+target/
+.local/
+.download/
+release.tar.gz
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+.idea/
+.vscode/
+__pycache__/
