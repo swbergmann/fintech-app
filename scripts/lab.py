@@ -207,6 +207,8 @@ def deploy(home, release, environment, accept_uat=False):
     try:
         print(f'Deploying {release} to {environment.upper()}…', flush=True)
         compose(home, release, environment, 'up', '-d', '--wait', '--wait-timeout', '900', 'db')
+        compose(home, release, environment, 'exec', '-T', 'db',
+                'bash', '-lc', 'bash /delivery-lab/init-db.sh')
         compose(home, release, environment, 'run', '--rm', '--no-deps', 'migrate')
         compose(home, release, environment, 'up', '-d', '--wait', '--wait-timeout', '240', 'backend', 'frontend')
         smoke(f'http://127.0.0.1:{PORTS[environment]}', release, environment)
@@ -220,6 +222,23 @@ def deploy(home, release, environment, accept_uat=False):
     write_json(home / 'history' / release / f'{environment}.json', receipt)
     write_json(home / 'state' / f'{environment}.json', receipt)
     print(f'{environment.upper()} ready at http://127.0.0.1:{PORTS[environment]}')
+
+def repair_initial(home, release):
+    """Explicit recovery of an initial failed DEV migration; never runs in normal deployment."""
+    valid_release(release)
+    directory = home / 'releases' / release
+    installed = read_json(home / 'installed' / f'{release}.json')
+    verify_release(directory)
+    if sha256(directory / 'manifest.json') != installed['manifest_sha256']:
+        raise ValueError('Installed release manifest was modified.')
+    docker_ready()
+    if image_ids(release) != installed['images']:
+        raise ValueError('Runtime image IDs changed.')
+    compose(home, release, 'dev', 'up', '-d', '--wait', '--wait-timeout', '900', 'db')
+    compose(home, release, 'dev', 'exec', '-T', 'db', 'bash', '-lc', 'bash /delivery-lab/init-db.sh')
+    compose(home, release, 'dev', 'run', '--rm', '--no-deps', 'migrate', '--repair-initial')
+    write_json(home / 'recoveries' / f'dev-{release}.json',
+               dict(installed, operation='repair-initial', completed_at=now(), environment='dev'))
 
 def status(home):
     for environment, port in PORTS.items():
@@ -245,6 +264,8 @@ def main():
     commands.add_parser('status')
     install_parser = commands.add_parser('install')
     install_parser.add_argument('--archive', type=Path, required=True)
+    repair_parser = commands.add_parser('repair-initial')
+    repair_parser.add_argument('--release', required=True)
     deploy_parser = commands.add_parser('deploy')
     deploy_parser.add_argument('--release', required=True)
     deploy_parser.add_argument('--environment', choices=PORTS, required=True)
@@ -259,6 +280,7 @@ def main():
         with locked(home):
             if args.command == 'init': initialize(home)
             elif args.command == 'install': install(home, args.archive)
+            elif args.command == 'repair-initial': repair_initial(home, args.release)
             elif args.command == 'deploy': deploy(home, args.release, args.environment, args.accept_uat)
             elif args.command == 'status': status(home)
             elif args.command == 'stop': stop(home, args.environment)

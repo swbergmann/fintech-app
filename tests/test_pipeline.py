@@ -121,4 +121,27 @@ class PipelineTests(unittest.TestCase):
         with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'LAB_HOME': ''}):
             with self.assertRaisesRegex(ValueError, 'LAB_HOME'): lab.lab_home()
 
+    def test_bootstrap_runs_after_database_readiness_and_before_migrations(self):
+        with patch.object(lab, 'verify_release'), patch.object(lab, 'sha256', return_value='expected'), \
+             patch.object(lab, 'docker_ready'), patch.object(lab, 'image_ids', return_value=self.installed['images']), \
+             patch.object(lab, 'compose') as compose, patch.object(lab, 'smoke'):
+            lab.deploy(self.home, RELEASE, 'dev')
+        operations = [call.args[3:] for call in compose.call_args_list]
+        self.assertEqual(operations[0][-1], 'db')
+        self.assertEqual(operations[1], ('exec', '-T', 'db', 'bash', '-lc', 'bash /delivery-lab/init-db.sh'))
+        self.assertEqual(operations[2], ('run', '--rm', '--no-deps', 'migrate'))
+        self.assertEqual(operations[3][-2:], ('backend', 'frontend'))
+
+    def test_bootstrap_failure_blocks_migrations_and_promotion(self):
+        with patch.object(lab, 'verify_release'), patch.object(lab, 'sha256', return_value='expected'), \
+             patch.object(lab, 'docker_ready'), patch.object(lab, 'image_ids', return_value=self.installed['images']), \
+             patch.object(lab, 'compose', side_effect=[None, ValueError('bootstrap failed')]) as compose, \
+             patch.object(lab, 'smoke') as smoke:
+            with self.assertRaisesRegex(ValueError, 'bootstrap failed'):
+                lab.deploy(self.home, RELEASE, 'dev')
+            self.assertEqual(compose.call_count, 2)
+            smoke.assert_not_called()
+        with self.assertRaisesRegex(ValueError, 'pass DEV first'):
+            lab.check_promotion(self.home, RELEASE, 'uat')
+
 if __name__ == '__main__': unittest.main()

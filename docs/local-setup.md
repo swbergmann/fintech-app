@@ -69,9 +69,23 @@ Credentials are created in `.local/env/*.env` with file permissions `0600`. `lab
 
 Add a new migration under `backend/src/main/resources/db/migration/`, for example `V2__add_created_at.sql`. Do not edit an applied migration. Flyway tracks versions and checksums in each environment independently.
 
-Deployment starts Oracle, waits for both database health and successful application-user creation, runs the release's migration container to completion, then starts the application. A failed migration or smoke test fails the deployment and does not create promotion evidence.
+Deployment starts Oracle and directly checks that FREEPDB1 is open read write. It then explicitly creates the application tablespace and user if missing, runs the release's migration container to completion, and starts the application. Bootstrap can be repeated without deleting records or resetting an existing password; it does not depend on Oracle image startup hooks or a pre-existing USERS tablespace. A failed bootstrap, migration, or smoke test fails deployment and does not create promotion evidence.
+
+If an older release reports an unhealthy database even though Oracle logs say `DATABASE IS READY TO USE!`, rebuild from the corrected source with `./scripts/local-demo.sh`, using the same `LAB_HOME`. The old setup depended on a marker file that the Lite image's startup did not create. A new release replaces the container configuration and retains its named database volume. Do not edit the installed release's manifest or delete the volume to apply this fix.
 
 There is no automatic database rollback. Oracle DDL can commit independently, so a failed multi-statement migration may leave partial changes. Investigate and make a forward correction, or restore a tested backup. The case study guide proposes this as a recovery exercise.
+
+### Recover the initial identity-column privilege failure
+
+The initial bootstrap omitted `CREATE SEQUENCE`, required by the identity column in `V1__create_customers.sql`. The corrected bootstrap grants it to APP in addition to `CREATE SESSION` and `CREATE TABLE`. The migration SQL itself is unchanged.
+
+If your first DEV migration failed with `ORA-01031` on that CREATE TABLE statement, use the same `LAB_HOME` and run:
+
+```bash
+./scripts/local-demo.sh --repair-initial
+```
+
+This builds a corrected release, reapplies the bootstrap privileges, and explicitly invokes Flyway repair before retrying deployment. Recovery is limited to DEV, the APP user, no existing CUSTOMERS table, and either empty migration history or exactly one failed `V1__create_customers.sql` entry. It refuses successful, additional, or unrelated migration history. It does not delete the database volume, reset passwords, or drop application tables. Do not use this option for other migration failures; inspect those separately. Normal local runs and GitHub deployments do not automatically repair migration history.
 
 ## Run checks without Oracle
 

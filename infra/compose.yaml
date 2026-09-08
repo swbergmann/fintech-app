@@ -6,11 +6,12 @@ services:
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run lab.py init first}
     volumes:
       - oracle-data:/opt/oracle/oradata
-      - ./init-db.sh:/opt/oracle/scripts/setup/01-create-app.sh:ro
+      - ./init-db.sh:/delivery-lab/init-db.sh:ro
+      - ./check-db.sh:/delivery-lab/check-db.sh:ro
     shm_size: 1g
     mem_limit: 3g
     healthcheck:
-      test: ["CMD-SHELL", "test -f /opt/oracle/oradata/.delivery-lab-ready && /opt/oracle/checkDBStatus.sh"]
+      test: ["CMD", "bash", "-lc", "bash /delivery-lab/check-db.sh"]
       interval: 15s
       timeout: 10s
       retries: 40

@@ -7,6 +7,10 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class DeliveryLabApplication {
 
 	public static void main(String[] args) {
+		if (java.util.Arrays.asList(args).contains("--repair-initial")) {
+			InitialMigrationRepair.run();
+			return;
+		}
 		var context = SpringApplication.run(DeliveryLabApplication.class, args);
 		if ("true".equals(System.getenv("MIGRATE_ONLY"))) {
 			System.exit(SpringApplication.exit(context));
