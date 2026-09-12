@@ -76,7 +76,7 @@ export default function App() {
           <p className="hint">Use fictional information only.</p>
         </section>
         <section className="records" aria-labelledby="records-heading" aria-busy={loading}>
-          <div className="section-heading"><h2 id="records-heading">Customers</h2><span>{customers.length} records</span></div>
+          <div className="section-heading"><h2 id="records-heading">Customers ({customers.length})</h2><span>{customers.length} records</span></div>
           {loading ? <p>Loading records…</p> : customers.length === 0 ? <div className="empty"><h3>No customers yet</h3><p>Add a fictional customer to test this environment.</p></div> :
             <ul className="customer-list">{customers.map((customer) => <li key={customer.id}>
               <div><strong>{customer.name}</strong><span>{customer.email}</span></div>
