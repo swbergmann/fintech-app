@@ -4,7 +4,7 @@ This project is ready to push; no repository or account connection has been crea
 
 ## 1. Upload the source
 
-Create an empty GitHub repository. A private repository is a sensible default when deployment runs on your own computer. Give access only to trusted teammates. From the project folder, substitute your actual repository URL below:
+Create an empty GitHub repository. The included CodeQL workflow is available for public repositories, or eligible organization-owned repositories with GitHub Code Security enabled. Choose visibility accordingly and give write access only to trusted teammates. From the project folder, substitute your actual repository URL below:
 
 ```bash
 git init -b main
@@ -28,6 +28,35 @@ Where supported by your repository plan, add a branch rule or ruleset for `main`
 Run CI once before selecting its status check. The workflow checks pull requests automatically, but repository settings enforce review and merge restrictions. Private repository rules and deployment-review features depend on your GitHub plan. If a required rule is unavailable, document the review as a team convention; do not claim GitHub enforces it.
 
 For eight developers, short feature branches, one reviewer, and one protected main branch are sufficient. DEV, UAT, and PROD are deployment environments, not separate long-lived Git branches.
+
+### Semgrep before tests and builds
+
+Immediately after checkout, `ci.yml` installs **Semgrep Community Edition 1.177.0** in an isolated Python environment and scans `frontend/src` and `backend/src` using the public `p/javascript`, `p/react`, and `p/java` rule packs. Semgrep examines source code without compiling or running the application, so it runs before Node.js/Java setup, application tests, and builds. No Semgrep account, token, Docker container, or separate server is required.
+
+The scan uses `--error` to fail on any reported finding, regardless of its severity, and `--strict` to fail on warnings such as parsing or configuration problems. A failed scan stops later steps, including release packaging; **Deploy DEV** already requires successful CI. `--metrics=off` disables usage metrics. Findings appear in **Actions → CI → Build and test → Scan React and Java with Semgrep**. See the official [Semgrep CLI reference](https://docs.semgrep.dev/cli-reference) for these options.
+
+The scanner version is pinned in the installation step; the public rule packs are downloaded on each run and can change independently. This is a source-code security scan, not a dependency vulnerability scan. Semgrep Community Edition has more limited analysis than its paid engine; the existing CodeQL analysis remains a complementary later check. See [Semgrep Community Edition](https://github.com/semgrep/semgrep). The local demo script does not run either security scanner.
+
+### CodeQL security analysis in CI
+
+The existing `ci.yml` uses CodeQL **advanced setup**. Do not also enable CodeQL default setup: if it is already enabled, switch it off before running this workflow. No separate CodeQL workflow or personal access token is needed. The workflow gives its GitHub token `security-events: write` to upload results. See GitHub's [CodeQL availability](https://docs.github.com/en/code-security/concepts/code-scanning/codeql/codeql-code-scanning) and [advanced setup instructions](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/configure-code-scanning/configuring-advanced-setup-for-code-scanning).
+
+On pull requests to `main` and pushes to `main`, the **Build and test** job now:
+
+1. Checks out the source, installs and runs Semgrep, then sets up Node.js and Java if the scan passes.
+2. Initializes CodeQL for `javascript-typescript` (including React JSX) and `java-kotlin`.
+3. Runs the existing npm tests/build and Maven `verify`. CodeQL initialization precedes Maven so it can trace Java compilation. The two languages share one job, so the single-language `build-mode` input is omitted.
+4. Runs CodeQL's default security queries and uploads the results to GitHub code scanning. Both CodeQL actions are pinned to the same commit, corresponding to v4.38.0.
+5. Tests the security gate, then runs `scripts/check_codeql.py` against the generated `javascript.sarif` and `java.sarif` reports.
+6. Packages and stores a main-branch release only after all preceding steps succeed.
+
+The gate fails for any reported **high or critical security finding**, using CodeQL's numeric `security-severity` score of **7.0 or higher**. It also fails if either report is missing or cannot be verified. Low/medium findings remain visible for review and do not block this gate. The gate evaluates the local reports; dismissing an alert in GitHub does not bypass it. GitHub documents the score in its [SARIF reference](https://docs.github.com/en/code-security/reference/code-scanning/sarif-files/sarif-support#reportingdescriptor-object). The official action documents its [initialization inputs](https://github.com/github/codeql-action/blob/b96794f015dfd88f77b49b1c93e0fa7110f94c63/init/action.yml) and [analysis outputs](https://github.com/github/codeql-action/blob/b96794f015dfd88f77b49b1c93e0fa7110f94c63/analyze/action.yml).
+
+Uploading findings alone does not make the Actions job fail on vulnerabilities; the additional gate makes that release decision explicit. A failed job prevents release packaging and **Deploy DEV**, which already requires successful CI. To prevent merging a failing PR as well, require **Build and test** in the `main` ruleset as described above. Adding the workflow does not change repository rules.
+
+For the first demonstration, commit and push the feature branch, open a PR, and inspect **Actions → CI → Build and test**. The **Analyze React and Java with CodeQL** step should report analysis of both languages; **Block high and critical security findings** should pass. Findings can be reviewed under **Security → Code scanning**. After merging, confirm that the main-branch run passes the same gate before **Package the main-branch release** and **Store the release** execute.
+
+The promotion-rule test step remains commented out for the current case-study stage. Only the new security-gate tests run through `python3 -m unittest discover -s tests -p test_codeql.py -v`. The local demo script does not run CodeQL; the security scan runs on GitHub's hosted CI runner.
 
 ## 3. Connect a local deployment runner
 
@@ -79,7 +108,7 @@ Open a pull request on GitHub; `git push` does not automatically create one. CI 
 
 After an approved merge to `main`:
 
-1. **CI** builds and tests the merged code, creates a checksum manifest, and uploads `release-COMMIT_SHA`.
+1. **CI** scans the merged source with Semgrep, builds and tests the application, runs CodeQL and its security gate, then creates a checksum manifest and uploads `release-COMMIT_SHA`.
 2. **Deploy DEV** downloads that exact run's artifact. Its checks exclude pull-request and fork results.
 3. The local runner creates the release's runtime images once, migrates DEV, deploys, and runs the Oracle smoke test.
 4. Open http://localhost:8080 on the runner computer. Copy the full 40-character release SHA from the successful workflow.
