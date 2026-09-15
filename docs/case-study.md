@@ -7,7 +7,7 @@ Treat this project as the initial, deliberately limited implementation for an ei
 | Step | Human action | Automated evidence |
 |---|---|---|
 | 1. Establish a baseline | Push the project and configure the runner. | CI results, release archive, first DEV deployment. |
-| 2. Open a small change | Create a feature branch, change the heading, push, and open a PR. | React tests, Java tests, and pipeline-rule tests. |
+| 2. Open a small change | Create a feature branch, change the heading, push, and open a PR. | Early Semgrep scan, React tests, Java tests, CodeQL analysis, and the security gate. |
 | 3. Demonstrate review feedback | Ask another developer to request one change; update the same branch. | The same PR updates and its checks rerun. |
 | 4. Merge | Reviewer approves and the author merges. | Main is tested; one release is packaged and deployed to DEV. |
 | 5. Promote | Release owner requests UAT using the exact SHA. | Previous-environment evidence, unchanged image IDs, UAT deployment and smoke test. |
@@ -45,7 +45,7 @@ This is an exercise to implement and verify, not an already-applied migration. R
 
 | Area | Included baseline | Case study improvement and evidence |
 |---|---|---|
-| CI | Frontend interaction tests, Java API tests, pipeline-rule tests, application builds. | Add code analysis, secret scanning, and dependency vulnerability gates. Demonstrate a blocked insecure change. |
+| CI | Semgrep SAST before tests/builds, blocking any reported finding; frontend interaction tests, Java tests, application builds, then CodeQL SAST with a gate blocking high/critical findings. Promotion-rule tests remain commented out in CI for the current stage. | Add secret scanning and dependency vulnerability gates. Demonstrate a security finding blocking a release. |
 | Code review | PR template; instructions for requiring one reviewer. | Add a focused security checklist and ownership rules. Record a defect found during review. |
 | Releases | Main SHA, checksum manifest, recorded runtime image IDs, no rebuilding during promotion. | Add signed provenance, SBOMs, digest-pinned base images, and verified artifacts. |
 | Oracle | Versioned migrations, validation before application deployment, separate database volumes and passwords. | Separate migration and runtime users; give the runtime user only needed CRUD grants. Test backups and forward recovery. |

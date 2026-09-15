@@ -7,7 +7,7 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 ## What you get
 
 - One repository for React, a Java 21 / Spring Boot backend, and versioned Oracle SQL migrations.
-- GitHub Actions checks for pull requests and merges to `main`.
+- GitHub Actions build, test, and Semgrep/CodeQL security checks for pull requests and merges to `main`.
 - A release containing the frontend build, Java JAR, and deployment files; Flyway migrations are inside the JAR.
 - Automatic DEV deployment after a successful main-branch build.
 - Manual UAT and PROD promotion workflows with checks that the same release passed the previous environment.
@@ -20,13 +20,13 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 | UAT | http://localhost:8081 | Manually request promotion; then perform acceptance testing. |
 | PROD | http://localhost:8082 | Confirm successful human UAT and manually request production promotion. |
 
-Here, **PROD is a local simulation**. Use fictional records only. Authentication, TLS, advanced security scanning, and Nagios are suggested case study extensions, not implemented production safeguards.
+Here, **PROD is a local simulation**. Use fictional records only. Semgrep and CodeQL scan React/Java source in CI; authentication, TLS, dependency vulnerability gates, and Nagios remain suggested case study extensions.
 
 ## How the pipeline works
 
 ```mermaid
 flowchart TD
-  A([HUMAN: write code and SQL, push branch, open pull request]) --> B[AUTO: React, Java and pipeline tests on GitHub]
+  A([HUMAN: write code and SQL, push branch, open pull request]) --> B[AUTO: Semgrep, React and Java tests and builds, CodeQL security gate on GitHub]
   B --> C([HUMAN: review; request changes or approve and merge])
   C --> D[AUTO: verify main and package one release on GitHub]
   D --> E[AUTO: local runner builds runtime images once]
@@ -38,6 +38,8 @@ flowchart TD
 ```
 
 The frontend and Java application are built once for each main-branch release. The local runner wraps those existing outputs in Docker runtime images once, during installation. Promotion reuses the recorded image IDs; it does not rerun npm, Maven, or Docker builds. Each Oracle instance receives the same pending Flyway migrations. Customer data is never copied between environments.
+
+CI runs Semgrep immediately after checkout, before application tests or builds, and stops on any reported finding. It then initializes CodeQL before the existing builds and analyzes the code afterward. A separate CodeQL gate blocks release packaging on high/critical findings or missing reports. The [GitHub guide](docs/github-setup.md#semgrep-before-tests-and-builds) explains both policies and how to require the check before merging. Promotion-rule tests remain commented out in CI for the current case-study stage; security-gate tests run independently.
 
 The default human release decision is GitHub's **Run workflow** action. This works without paid environment-review features. It is not an independent second-person approval. The GitHub guide explains how to add enforced reviewer gates when your repository supports them.
 
@@ -71,6 +73,7 @@ Replace `YOUR_RELEASE_ID` with the printed value. GitHub releases use the full c
 | `.github/workflows/` | CI, automatic DEV deployment, manual promotion |
 | `infra/` | Docker runtime images, proxy, isolated environment definition, database bootstrap |
 | `scripts/package.py` | Package already-built artifacts and their checksums |
+| `scripts/check_codeql.py` | Block high/critical CodeQL findings before release packaging |
 | `scripts/lab.py` | Install, deploy, enforce promotion order, record evidence, stop environments |
 | `scripts/smoke.py` | Verify frontend version, backend version, health, validation, and real database CRUD |
 | `tests/` | Failure and success cases for the release process |

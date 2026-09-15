@@ -8,14 +8,26 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
   verify:
     name: Build and test
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      # Semgrep inspects source code before application tests or compilation.
+      - name: Install Semgrep
+        run: |
+          python3 -m venv "$RUNNER_TEMP/semgrep-venv"
+          "$RUNNER_TEMP/semgrep-venv/bin/python" -m pip install semgrep==1.177.0
+      - name: Scan React and Java with Semgrep
+        run: |
+          "$RUNNER_TEMP/semgrep-venv/bin/semgrep" scan \
+            --config p/javascript --config p/react --config p/java \
+            --error --strict --metrics=off \
+            frontend/src backend/src
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -26,6 +38,11 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      # Initialize before Maven so CodeQL can trace Java compilation.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: javascript-typescript, java-kotlin
       - name: Test and build React
         run: |
           npm --prefix frontend ci
@@ -35,6 +52,16 @@ jobs:
         run: ./backend/mvnw -f backend/pom.xml -B -ntp verify
       # - name: Test release promotion rules
       #   run: python3 -m unittest discover -s tests -v
+      - name: Analyze React and Java with CodeQL
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          output: ${{ runner.temp }}/codeql-results
+      - name: Block high and critical security findings
+        env:
+          CODEQL_RESULTS: ${{ runner.temp }}/codeql-results
+        run: |
+          python3 -m unittest discover -s tests -p test_codeql.py -v
+          python3 scripts/check_codeql.py "$CODEQL_RESULTS"
       - name: Package the main-branch release
         if: github.event_name == 'push'
         env:
