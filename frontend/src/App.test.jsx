@@ -29,7 +29,7 @@ test('reports an unavailable backend and prevents submission', async () => {
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Offline')));
   render(<App />);
   expect(await screen.findByRole('alert')).toHaveTextContent('Cannot reach this environment');
-  expect(screen.getByRole('button', { name: 'Add customer' })).toBeEnabled(); // Intentional failure for the CI demonstration.
+  expect(screen.getByRole('button', { name: 'Add customer' })).toBeDisabled();
 });
 
 test('keeps a record visible when deletion fails', async () => {
