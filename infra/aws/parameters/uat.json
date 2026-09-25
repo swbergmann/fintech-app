@@ -1,0 +1,7 @@
+[
+  {"ParameterKey": "EnvironmentName", "ParameterValue": "uat"},
+  {"ParameterKey": "DatabaseInstanceClass", "ParameterValue": "db.t3.small"},
+  {"ParameterKey": "DatabaseAllocatedStorage", "ParameterValue": "20"},
+  {"ParameterKey": "DatabaseMultiAZ", "ParameterValue": "false"},
+  {"ParameterKey": "ProtectDatabase", "ParameterValue": "false"}
+]

@@ -1,0 +1,452 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Delivery Lab environment foundation; deploy separately for DEV, UAT and PROD.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: delivery-lab
+    AllowedPattern: '[a-z][a-z0-9-]{1,24}'
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, uat, prod]
+  SharedStackName:
+    Type: String
+    Default: delivery-lab-shared
+  AllowedClientCidr:
+    Type: String
+    Description: IPv4 CIDR allowed to access the lab load balancer, normally your public IPv4 address /32.
+    AllowedPattern: '(\d{1,3}\.){3}\d{1,3}/([1-9]|[12][0-9]|3[0-2])'
+    ConstraintDescription: Specify a restricted IPv4 CIDR; 0.0.0.0/0 is not accepted.
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: Optional ACM certificate in this region; empty enables restricted HTTP for the fictional-data lab.
+    AllowedPattern: '^$|arn:aws:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+'
+  OracleEngineVersion:
+    Type: String
+    Description: Exact available Oracle 19c SE2 engine version; select during AWS setup and use across all environments.
+    AllowedPattern: '19\..+'
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t3.small
+    AllowedPattern: 'db\.[a-z0-9]+\.[a-z0-9]+'
+  DatabaseAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+  DatabaseMultiAZ:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Single-AZ is the cost-conscious lab baseline, including simulated PROD.
+  ProtectDatabase:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Must be deliberately disabled before deleting the database stack.
+
+Mappings:
+  Network:
+    dev:
+      Label: DEV
+      Vpc: 10.20.0.0/16
+      PublicA: 10.20.0.0/24
+      PublicB: 10.20.1.0/24
+      DatabaseA: 10.20.10.0/24
+      DatabaseB: 10.20.11.0/24
+    uat:
+      Label: UAT
+      Vpc: 10.21.0.0/16
+      PublicA: 10.21.0.0/24
+      PublicB: 10.21.1.0/24
+      DatabaseA: 10.21.10.0/24
+      DatabaseB: 10.21.11.0/24
+    prod:
+      Label: PROD
+      Vpc: 10.22.0.0/16
+      PublicA: 10.22.0.0/24
+      PublicB: 10.22.1.0/24
+      DatabaseA: 10.22.10.0/24
+      DatabaseB: 10.22.11.0/24
+
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+  IsProduction: !Equals [!Ref EnvironmentName, prod]
+  UseMultiAZ: !Equals [!Ref DatabaseMultiAZ, 'true']
+  KeepDatabase: !Equals [!Ref ProtectDatabase, 'true']
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [Network, !Ref EnvironmentName, Vpc]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}'
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !FindInMap [Network, !Ref EnvironmentName, PublicA]
+      MapPublicIpOnLaunch: false
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !FindInMap [Network, !Ref EnvironmentName, PublicB]
+      MapPublicIpOnLaunch: false
+  DatabaseSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !FindInMap [Network, !Ref EnvironmentName, DatabaseA]
+      MapPublicIpOnLaunch: false
+  DatabaseSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !FindInMap [Network, !Ref EnvironmentName, DatabaseB]
+      MapPublicIpOnLaunch: false
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+  PublicAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+  DatabaseRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  DatabaseAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabaseSubnetA
+      RouteTableId: !Ref DatabaseRouteTable
+  DatabaseAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabaseSubnetB
+      RouteTableId: !Ref DatabaseRouteTable
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Restricted client access to the lab load balancer.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedClientCidr
+        - !If
+          - HasCertificate
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: !Ref AllowedClientCidr
+          - !Ref AWS::NoValue
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          DestinationSecurityGroupId: !GetAtt ApplicationSecurityGroup.GroupId
+  ApplicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fargate tasks; HTTPS outbound to AWS services and Oracle within this environment.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 1521
+          ToPort: 1521
+          DestinationSecurityGroupId: !GetAtt DatabaseSecurityGroup.GroupId
+  ApplicationIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ApplicationSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Oracle reachable only from Fargate tasks in this environment.
+      VpcId: !Ref Vpc
+      # An explicit inert egress rule prevents EC2's default allow-all egress.
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 1
+          ToPort: 1
+          CidrIp: 127.0.0.1/32
+  DatabaseIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 1521
+      ToPort: 1521
+      SourceSecurityGroupId: !GetAtt ApplicationSecurityGroup.GroupId
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Isolated Oracle subnets without an internet route.
+      SubnetIds: [!Ref DatabaseSubnetA, !Ref DatabaseSubnetB]
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-${EnvironmentName}'
+      Engine: oracle-se2
+      EngineVersion: !Ref OracleEngineVersion
+      LicenseModel: license-included
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      DBName: LAB
+      CharacterSetName: AL32UTF8
+      AllocatedStorage: !Ref DatabaseAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: LABADMIN
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!GetAtt DatabaseSecurityGroup.GroupId]
+      PubliclyAccessible: false
+      MultiAZ: !If [UseMultiAZ, true, false]
+      Port: '1521'
+      BackupRetentionPeriod: !If [IsProduction, 7, 1]
+      CopyTagsToSnapshot: true
+      DeletionProtection: !If [KeepDatabase, true, false]
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: false
+      EnableCloudwatchLogsExports: [alert, listener]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+  ApplicationDatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub 'APP credentials for ${ProjectName} ${EnvironmentName}; user creation is a later bootstrap task.'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"APP"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+        IncludeSpace: false
+        RequireEachIncludedType: true
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ProjectName}-${EnvironmentName}'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+  ApplicationLogs:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub '/delivery-lab/${ProjectName}/${EnvironmentName}'
+      RetentionInDays: !If [IsProduction, 30, 14]
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        - PolicyName: pull-images-inject-app-secret-write-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:GetDownloadUrlForLayer, ecr:BatchGetImage]
+                Resource:
+                  - Fn::ImportValue: !Sub '${SharedStackName}-FrontendRepositoryArn'
+                  - Fn::ImportValue: !Sub '${SharedStackName}-BackendRepositoryArn'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt ApplicationLogs.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ApplicationDatabaseSecret
+  ApplicationTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # The application uses JDBC and HTTP, so it needs no AWS API permissions.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: GatewayAttachment
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroups: [!GetAtt LoadBalancerSecurityGroup.GroupId]
+      LoadBalancerAttributes:
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Port: 80
+      Protocol: HTTP
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - HasCertificate
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: '443'
+              StatusCode: HTTP_301
+          - Type: forward
+            TargetGroupArn: !Ref FrontendTargetGroup
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+Outputs:
+  ApplicationEnvironment:
+    Value: !FindInMap [Network, !Ref EnvironmentName, Label]
+    Export:
+      Name: !Sub '${AWS::StackName}-ApplicationEnvironment'
+  EnvironmentName:
+    Value: !Ref EnvironmentName
+    Export:
+      Name: !Sub '${AWS::StackName}-EnvironmentName'
+  ClusterArn:
+    Value: !GetAtt Cluster.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterArn'
+  TaskSubnetIds:
+    Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskSubnetIds'
+  TaskSecurityGroupId:
+    Value: !GetAtt ApplicationSecurityGroup.GroupId
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskSecurityGroupId'
+  TaskExecutionRoleArn:
+    Value: !GetAtt TaskExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskExecutionRoleArn'
+  ApplicationTaskRoleArn:
+    Value: !GetAtt ApplicationTaskRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ApplicationTaskRoleArn'
+  ApplicationLogGroup:
+    Value: !Ref ApplicationLogs
+    Export:
+      Name: !Sub '${AWS::StackName}-ApplicationLogGroup'
+  DatabaseUrl:
+    Value: !Sub 'jdbc:oracle:thin:@//${Database.Endpoint.Address}:${Database.Endpoint.Port}/LAB'
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseUrl'
+  ApplicationDatabaseSecretArn:
+    Value: !Ref ApplicationDatabaseSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-ApplicationDatabaseSecretArn'
+  DatabaseAdminSecretArn:
+    Description: For a separate database bootstrap role; never grant this to application tasks.
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+  DatabaseInstanceIdentifier:
+    Value: !Ref Database
+  FrontendTargetGroupArn:
+    Value: !Ref FrontendTargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendTargetGroupArn'
+  LoadBalancerDnsName:
+    Description: Use this directly for HTTP or point your certificate's domain at it for HTTPS.
+    Value: !GetAtt LoadBalancer.DNSName

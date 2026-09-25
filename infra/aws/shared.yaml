@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Delivery Lab shared image registry. Create once per AWS account and region.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: delivery-lab
+    AllowedPattern: '[a-z][a-z0-9-]{1,24}'
+
+Resources:
+  FrontendRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${ProjectName}/frontend'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+  BackendRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${ProjectName}/backend'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+# No image expiry rule: an older image can still be running in PROD or needed for rollback.
+Outputs:
+  FrontendRepositoryUri:
+    Value: !GetAtt FrontendRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendRepositoryUri'
+  BackendRepositoryUri:
+    Value: !GetAtt BackendRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-BackendRepositoryUri'
+  FrontendRepositoryArn:
+    Value: !GetAtt FrontendRepository.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendRepositoryArn'
+  BackendRepositoryArn:
+    Value: !GetAtt BackendRepository.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BackendRepositoryArn'
