@@ -42,7 +42,7 @@ def validate(region):
         templates[path.stem] = template
 
     # cfn-lint validates each file separately; also check their import/export contract.
-    providers = {'SharedStackName': 'shared', 'EnvironmentStackName': 'environment'}
+    providers = {'SharedStackName': 'shared', 'EnvironmentStackName': 'environment', 'AccessStackName': 'access'}
     exports = {
         parameter: {output['Export']['Name']['Fn::Sub'].replace('${AWS::StackName}-', '', 1)
                     for output in templates[name]['Outputs'].values() if 'Export' in output}
@@ -51,7 +51,7 @@ def validate(region):
     for name, template in templates.items():
         for value in imports(template):
             expression = value.get('Fn::Sub', '')
-            match = re.fullmatch(r'\$\{(SharedStackName|EnvironmentStackName)\}-(.+)', expression)
+            match = re.fullmatch(r'\$\{(SharedStackName|EnvironmentStackName|AccessStackName)\}-(.+)', expression)
             require(match is not None, f'{name}: unrecognized stack import {expression}')
             require(match[2] in exports[match[1]], f'{name}: missing export for {expression}')
 
@@ -85,17 +85,17 @@ def validate(region):
                         number <= schema.get('MaxValue', float('inf')), f'{name}: invalid {key}')
         missing = {key for key, schema in environment['Parameters'].items()
                    if 'Default' not in schema and key not in values}
-        require(missing == {'AllowedClientCidr', 'OracleEngineVersion'},
+        require(missing == {'AllowedClientCidr', 'OracleEngineVersion', 'ExpiresAt'},
                 f'{name}: unexpected required inputs {sorted(missing)}')
     require(all(not a.overlaps(b) for a, b in itertools.combinations(vpcs, 2)),
             'Environment VPC address ranges overlap')
     print(f'Validated {len(paths)} templates, stack references, network isolation and 3 parameter profiles.')
-    print('No AWS calls or deployments. Client CIDR and exact Oracle version remain deployment inputs.')
+    print('No AWS calls or deployments. Client CIDR, Oracle version and expiry remain deployment inputs.')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--region', default='eu-central-1', help='Schema region for cfn-lint only.')
+    parser.add_argument('--region', default='eu-west-1', help='Schema region for cfn-lint only.')
     args = parser.parse_args()
     try:
         validate(args.region)
