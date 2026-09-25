@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths: ['infra/aws/**', 'tests/test_aws_infrastructure.py', '.github/workflows/aws-infrastructure.yml']
   push:
-    branches: [main, feature/aws-access]
+    branches: [main]
     paths: ['infra/aws/**', 'tests/test_aws_infrastructure.py', '.github/workflows/aws-infrastructure.yml']
   workflow_dispatch:
     inputs:
