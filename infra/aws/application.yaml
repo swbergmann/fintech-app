@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Delivery Lab release on ECS/Fargate. Requires AWS-ready images and a bootstrapped Oracle APP user.
+
+Parameters:
+  EnvironmentStackName:
+    Type: String
+    Description: Name of the environment.yaml stack supplying networking, database and roles.
+  SharedStackName:
+    Type: String
+    Default: delivery-lab-shared
+  ReleaseId:
+    Type: String
+    AllowedPattern: '[a-f0-9]{40}'
+    Description: Full Git commit SHA of the tested release, identical across DEV, UAT and PROD.
+  FrontendImageDigest:
+    Type: String
+    AllowedPattern: 'sha256:[a-f0-9]{64}'
+  BackendImageDigest:
+    Type: String
+    AllowedPattern: 'sha256:[a-f0-9]{64}'
+  DesiredCount:
+    Type: Number
+    Default: 0
+    AllowedValues: [0, 1, 2]
+    Description: Start at zero; set to one only after database bootstrap and migrations pass.
+
+Resources:
+  ApplicationTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-web'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '512'
+      Memory: '1024'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentStackName}-TaskExecutionRoleArn'
+      TaskRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationTaskRoleArn'
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Sub
+            - '${RepositoryUri}@${BackendImageDigest}'
+            - RepositoryUri:
+                Fn::ImportValue: !Sub '${SharedStackName}-BackendRepositoryUri'
+          Essential: true
+          Memory: 768
+          Environment:
+            - Name: APP_ENV
+              Value:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationEnvironment'
+            - Name: RELEASE_ID
+              Value: !Ref ReleaseId
+            - Name: DB_URL
+              Value:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-DatabaseUrl'
+            - Name: DB_MIGRATE
+              Value: 'false'
+          Secrets:
+            - Name: DB_USERNAME
+              ValueFrom: !Sub
+                - '${SecretArn}:username::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationDatabaseSecretArn'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationDatabaseSecretArn'
+          HealthCheck:
+            Command: [CMD-SHELL, 'curl -fsS http://127.0.0.1:8080/actuator/health || exit 1']
+            Interval: 15
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+          StopTimeout: 60
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationLogGroup'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: backend
+        - Name: frontend
+          Image: !Sub
+            - '${RepositoryUri}@${FrontendImageDigest}'
+            - RepositoryUri:
+                Fn::ImportValue: !Sub '${SharedStackName}-FrontendRepositoryUri'
+          Essential: true
+          Memory: 128
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          # ECS awsvpc containers in one task share localhost, not Compose DNS.
+          # Step 3 must teach the frontend image to render this Nginx setting.
+          Environment:
+            - Name: BACKEND_UPSTREAM
+              Value: 127.0.0.1:8080
+          DependsOn:
+            - ContainerName: backend
+              Condition: HEALTHY
+          HealthCheck:
+            Command: [CMD-SHELL, 'wget -q --spider http://127.0.0.1/release.json || exit 1']
+            Interval: 15
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationLogGroup'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+  ApplicationService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster:
+        Fn::ImportValue: !Sub '${EnvironmentStackName}-ClusterArn'
+      TaskDefinition: !Ref ApplicationTask
+      LaunchType: FARGATE
+      PlatformVersion: '1.4.0'
+      DesiredCount: !Ref DesiredCount
+      EnableExecuteCommand: false
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+      HealthCheckGracePeriodSeconds: 120
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # Public egress avoids a NAT gateway per lab environment; ingress is ALB-only.
+          AssignPublicIp: ENABLED
+          Subnets: !Split
+            - ','
+            - Fn::ImportValue: !Sub '${EnvironmentStackName}-TaskSubnetIds'
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${EnvironmentStackName}-TaskSecurityGroupId'
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 80
+          TargetGroupArn:
+            Fn::ImportValue: !Sub '${EnvironmentStackName}-FrontendTargetGroupArn'
+      Tags:
+        - Key: Release
+          Value: !Ref ReleaseId
+
+Outputs:
+  ServiceArn:
+    Value: !Ref ApplicationService
+  ApplicationTaskDefinitionArn:
+    Value: !Ref ApplicationTask
+  ReleaseId:
+    Value: !Ref ReleaseId
+  FrontendImageDigest:
+    Value: !Ref FrontendImageDigest
+  BackendImageDigest:
+    Value: !Ref BackendImageDigest

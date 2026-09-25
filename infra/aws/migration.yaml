@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Register a release-specific migration task without updating the running application.
+
+Parameters:
+  EnvironmentStackName:
+    Type: String
+  SharedStackName:
+    Type: String
+    Default: delivery-lab-shared
+  ReleaseId:
+    Type: String
+    AllowedPattern: '[a-f0-9]{40}'
+  BackendImageDigest:
+    Type: String
+    AllowedPattern: 'sha256:[a-f0-9]{64}'
+
+Resources:
+  MigrationTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-migrate'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentStackName}-TaskExecutionRoleArn'
+      TaskRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationTaskRoleArn'
+      ContainerDefinitions:
+        - Name: migrate
+          Image: !Sub
+            - '${RepositoryUri}@${BackendImageDigest}'
+            - RepositoryUri:
+                Fn::ImportValue: !Sub '${SharedStackName}-BackendRepositoryUri'
+          Essential: true
+          Environment:
+            - Name: DB_URL
+              Value:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-DatabaseUrl'
+            - Name: DB_MIGRATE
+              Value: 'true'
+            - Name: MIGRATE_ONLY
+              Value: 'true'
+            - Name: SPRING_MAIN_WEB_APPLICATION_TYPE
+              Value: none
+            - Name: APP_ENV
+              Value:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationEnvironment'
+            - Name: RELEASE_ID
+              Value: !Ref ReleaseId
+          Secrets:
+            - Name: DB_USERNAME
+              ValueFrom: !Sub
+                - '${SecretArn}:username::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationDatabaseSecretArn'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationDatabaseSecretArn'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationLogGroup'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: migrate
+
+Outputs:
+  MigrationTaskDefinitionArn:
+    Description: The future CD workflow must run this task and check exit code zero before updating application.yaml.
+    Value: !Ref MigrationTask
+  ReleaseId:
+    Value: !Ref ReleaseId
+  BackendImageDigest:
+    Value: !Ref BackendImageDigest

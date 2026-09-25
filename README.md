@@ -4,6 +4,10 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 
 **Start here:** [Local setup](docs/local-setup.md) → [GitHub setup](docs/github-setup.md) → [Case study walkthrough](docs/case-study.md).
 
+**AWS migration — step 1:** [CloudFormation infrastructure definitions](infra/aws/README.md)
+now describe the planned AWS DEV, UAT and PROD environments. They are not deployed;
+the existing delivery workflows still target the local lab.
+
 ## What you get
 
 - One repository for React, a Java 21 / Spring Boot backend, and versioned Oracle SQL migrations.
@@ -72,6 +76,7 @@ Replace `YOUR_RELEASE_ID` with the printed value. GitHub releases use the full c
 | `backend/src/main/resources/db/migration/` | Versioned Oracle changes; starts with `V1__create_customers.sql` |
 | `.github/workflows/` | CI, automatic DEV deployment, manual promotion |
 | `infra/` | Docker runtime images, proxy, isolated environment definition, database bootstrap |
+| `infra/aws/` | Planned CloudFormation templates, environment profiles and offline validation |
 | `scripts/package.py` | Package already-built artifacts and their checksums |
 | `scripts/check_codeql.py` | Block high/critical CodeQL findings before release packaging |
 | `scripts/lab.py` | Install, deploy, enforce promotion order, record evidence, stop environments |
