@@ -1,6 +1,6 @@
 # Case study walkthrough
 
-**Migration status:** Deploy DEV and Promote release now target AWS. This guide retains the original local demonstration and acceptance checklist; use [the AWS guide](../infra/aws/README.md#controlled-aws-uat-and-prod-promotion-step-6) for current workflow inputs, evidence gates and environment setup.
+**Migration status:** Deploy DEV and Promote release now target AWS, with a separate Recover deployment workflow. This guide retains the original local demonstration and acceptance checklist; use [the AWS guide](../infra/aws/README.md#controlled-aws-uat-and-prod-promotion-step-6) for current workflow inputs, evidence gates and environment setup.
 
 Treat this project as the initial, deliberately limited implementation for an eight-person team. The app is a vehicle for demonstrating changes, tests, migrations, reviews, releases, and operational feedback.
 
@@ -55,7 +55,7 @@ This is an exercise to implement and verify, not an already-applied migration. R
 | Approval | Authorized manual promotion and UAT attestation. | Add independent environment reviewers where supported; demonstrate a rejected deployment and prevention of self-approval. |
 | Monitoring | Health endpoint and post-deployment smoke tests. | Configure Nagios checks for `/api/health`, HTTP response time, memory, disk, and service availability. Record thresholds and real alert times. |
 | Security logs | Standard application/container logs; no centralized security event collection. | Add structured audit events, data redaction, protected centralized storage, and incident alert rules. |
-| Recovery | Failed releases block further promotion; no automatic rollback. | Design application rollback and database recovery separately. Measure recovery time in a controlled exercise. |
+| Recovery | Local Compose failures block promotion. AWS adds ECS service rollback and checked manual application recovery; see the AWS recovery guide. | Measure recovery time, test schema-change handling and design database restoration separately. |
 
 The app currently has no login or role-based authorization and serves HTTP locally. It is a learning baseline, not a financial-services production system. Keep its scope clear when evaluating the security improvements.
 

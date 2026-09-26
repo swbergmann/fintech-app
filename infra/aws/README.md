@@ -1,4 +1,4 @@
-# AWS infrastructure and CI/CD delivery: steps 1–6
+# AWS infrastructure and CI/CD delivery: steps 1–7
 
 The lab uses CloudFormation to provision DEV, UAT and PROD in **Ireland
 (`eu-west-1`)**. Step 2 establishes GitHub OIDC access and creates the environment
@@ -6,7 +6,8 @@ foundations. Step 3 prepares the application images and the separate Oracle
 bootstrap task. Step 4 extends CI to publish the two application images to ECR
 and store their digests. Step 5 connects **Deploy DEV** to CloudFormation,
 ECS/Fargate and RDS Oracle. Step 6 enables manual **AWS UAT/PROD** promotion
-with verified prior-stage evidence and human acceptance before PROD.
+with verified prior-stage evidence and human acceptance before PROD. Step 7 adds
+controlled application recovery and failure diagnostics.
 
 **This is a disposable academic lab:** provisioning schedules deletion of selected
 environments and their fictional data **eight hours after the foundations are ready**.
@@ -571,6 +572,175 @@ rule test remains commented out at the earlier case-study author's request.
 Official references: [GitHub workflow runs](https://docs.github.com/en/rest/actions/workflow-runs),
 [GitHub artifact metadata and downloads](https://docs.github.com/en/rest/actions/artifacts),
 [GitHub environment rules](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
+
+## Deployment recovery (step 7)
+
+### Automatic service rollback and controlled recovery
+
+`application.yaml` already enables the ECS deployment circuit breaker with
+rollback. ECS can return a failed service deployment to its last completed
+service deployment; without a completed deployment, there is no automatic
+rollback target. This responds to task startup/health failures, not all business
+or API failures. A service that starts successfully but fails the later smoke
+test still needs investigation and an explicit recovery decision.
+[Source: AWS circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
+
+The new **Recover deployment** workflow (`recover.yml`) provides that manual path.
+It reuses the existing Mac runner, GitHub OIDC environments and environment-specific
+roles. No new instances, role variables, image builds or long-lived credentials
+are required. It shares `delivery-lab-aws` concurrency with deployment and
+infrastructure operations. Keep the environment's original eight-hour deadline;
+recovery never provisions, extends or recreates it.
+
+| Input | Meaning |
+|---|---|
+| Branch | `main` only |
+| `environment` | Existing `dev`, `uat` or `prod` environment |
+| `release_id` | Full SHA previously verified in this same environment and session |
+| `previous_run_id` | Successful original Deploy DEV or Promote release run for that SHA/environment |
+| `verify_only` | Defaults to true: check prerequisites without changing AWS |
+| `confirm_recovery` | Required when applying recovery; records the operator's decision to retain database state and restore application images |
+
+A previously successful UAT release alone cannot authorize PROD recovery. The
+target needs its own successful PROD evidence, including the recorded UAT
+acceptance and promotion chain. Local test receipts and recovery receipts cannot
+replace these original GitHub deployment records.
+
+### Recovery checks and scope
+
+`scripts/recover_aws_release.py` checks the following before executing an update:
+
+1. The target environment is owned, ready, has at least an hour before cleanup,
+   and belongs to the same foundation session as the successful target deployment.
+   The runner's public IPv4 must still match its access restriction. Busy stacks,
+   `UPDATE_ROLLBACK_FAILED`, `ROLLBACK_COMPLETE`, missing environments or a stopped
+   lab fail closed. Resolve the original stack problem first.
+2. The selected successful main-branch deployment and its CI artifacts pass the
+   same GitHub provenance, digest and manifest checks used for promotion.
+   Recovery also verifies the original PROD acceptance where applicable.
+3. The latest migration stack must identify one successful main CI release and
+   the backend digest recorded by that release. Compare its packaged migration
+   bundle with the target's: every versioned SQL file, bundled Flyway library and
+   application configuration file must be byte-for-byte identical. Even an
+   intentionally backward-compatible schema change blocks this simple recovery
+   path. This deliberately narrow policy suits the lab; changed schemas require
+   a separately tested forward fix.
+4. ECS must still retain the latest bootstrap and migration task records for the
+   current migration definitions. Both must have stopped with explicit exit code
+   zero, the expected image, and no command/environment overrides. Running,
+   failed, missing or incomplete task evidence blocks recovery. ECS retains
+   stopped tasks for **at least one hour**, not indefinitely; this is a short
+   incident-recovery window, independent of artifact retention.
+   [Source: AWS DescribeTasks](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html).
+5. The deployed application template must match the reviewed template in the
+   selected controller revision. Infrastructure validation requires that template
+   to contain only the ECS task/service, keep application `DB_MIGRATE=false`, and
+   retain the circuit breaker. Unexpected template changes need review rather
+   than an automatic configuration downgrade.
+6. Resolve the target's existing ECR digests. Create a CloudFormation change set
+   using the **previous deployed template**, changing only `ReleaseId`,
+   `FrontendImageDigest` and `BackendImageDigest`; preserve every other parameter.
+   Reject changes outside the application task and existing ECS service, including
+   service replacement. Recheck stack identities/state and database task evidence
+   immediately before execution. If those three parameters already match, skip
+   the update and still perform verification.
+7. Require ECS to stabilize on the requested task definition and exact image
+   digests. Run the existing frontend/API/Oracle smoke tests. Only then write
+   `status: recovered`, including source/target SHAs, prior evidence, migration
+   fingerprint, database task IDs, change-set identity, requester, URL and expiry.
+
+The workflow stores a distinct `aws-recovery-<environment>-<run>-<attempt>`
+artifact for 30 days. Verification-only results use `status: verified-only`;
+failed attempts replace any older local success record with `status: failed`.
+A recovered application is not recorded as a successful deployment of the failed
+release, and recovery evidence cannot substitute for a normal promotion pass.
+
+### Database boundaries and forward fixes
+
+The compatibility gate compares **release contents and recent task outcomes**.
+It does not query Oracle's actual schema or prove compatibility after manual DDL,
+changed migration locations, custom migration code or out-of-band database changes.
+The lab assumes database changes are managed only through its versioned SQL and
+separate migration tasks. Investigate any contrary evidence before recovery.
+The unchanged migration stack is intentionally retained after application recovery.
+
+CI now fetches the checked-out commit and its first parent, and runs
+`check_migration_changes.py` across that merge/push boundary. Existing migration
+files cannot be edited, deleted or renamed; changes must be new `V...__name.sql`
+files. This supports the append-only database history assumption. Flyway likewise
+recommends adding new versioned migrations and rolling changes forward after
+an applied version needs correction.
+[Source: Flyway versioned migrations](https://documentation.red-gate.com/fd/versioned-migrations-273973333.html).
+
+Recovery never runs bootstrap, Flyway migrate/repair/undo, database restore or
+password rotation. It preserves the environment, database and data; smoke tests
+only create and remove their own fictional record. **The existing automatic ECS
+rollback does not execute this manual compatibility gate.** Normal schema changes
+must therefore support the overlapping old/new application versions during a
+rolling deployment. Use additive changes first, migrate application usage, and
+remove old structures in a later tested release.
+
+If migrations changed or failed, inspect the database and Flyway history, prepare
+a corrective release with an appropriate new migration, and follow normal
+CI → DEV → UAT → accepted PROD delivery. The helper deliberately does not bypass
+a failed migration history entry. A DBA must review any necessary repair; the
+local-only `--repair-initial` demo option is not an AWS recovery mechanism.
+Data restoration from RDS backups is a separate incident procedure requiring
+its own restore target, data-loss assessment and verification; it is not
+implemented or automatically triggered by this application rollback.
+
+### Failure diagnostics and operator sequence
+
+Deploy DEV and Promote release now collect a separate failure artifact containing
+bounded CloudFormation status/events and ECS service rollout details.
+`aws_diagnostics.py` does not read secret values or container log contents. Its
+stack-output allowlist excludes database connection strings and secret identifiers. Collection
+is best-effort and cannot turn the original failed deployment into a success;
+if credentials or AWS APIs are unavailable, collection may also fail. These
+`aws-diagnostics-...` artifacts are retained for seven days. Recovery includes
+its own diagnostics alongside its receipt when it fails.
+
+1. Read the failed run, receipt and diagnostic artifact. Determine whether the
+   failure occurred before migration, in migration, during service rollout, or
+   in a smoke test. For further detail inspect the named CloudFormation stack,
+   ECS task and environment's CloudWatch log group; do not copy passwords into
+   issue reports or workflow inputs.
+2. Wait for any CloudFormation/ECS rollback to settle. Identify a previously
+   successful release **in the affected environment**, not simply the latest CI.
+3. Run **Recover deployment** with `verify_only=true`. Review the planned source
+   and target SHAs and any blocked prerequisite. Missing evidence is a reason
+   to investigate, not to disable the checks.
+4. When application-only recovery is appropriate, rerun with `verify_only=false`
+   and `confirm_recovery=true`. Observe the verified outcome and smoke tests.
+5. Inspect critical user workflows and preserve the incident evidence. Resume
+   normal delivery with a corrected, tested release; do not mark the failed
+   deployment as passed or use the recovery artifact as promotion evidence.
+
+For a local verification/rehearsal using the same helper:
+
+```bash
+python3 scripts/recover_aws_release.py --profile default --verify-only \
+  --environment dev --release PREVIOUS_FULL_SHA --previous-run-id PASSED_DEV_RUN_ID \
+  --repository swbergmann/fintech-app --account 637423555881 --region eu-west-1 \
+  --output .local/aws-recovery-receipt.json
+# Apply only after reviewing the preflight: replace --verify-only with --confirm-recovery.
+```
+
+For a non-destructive DEV rehearsal, use two already successful releases with
+identical migration bundles. Recover the older one, verify a fictional marker
+record remains, restore the newer one through the same checked path, verify
+again and remove the marker. This demonstrates explicit application recovery;
+it does not demonstrate automatic circuit-breaker failure detection or database
+backup restoration. A local rehearsal also does not prove the new GitHub OIDC
+workflow ran; execute that workflow after merging it to `main`.
+
+Recovery creates a new task-definition revision. Existing promotion checks bind
+normal deployment evidence to the running revision, so an older receipt may no
+longer qualify even after restoring the same images. After a DEV rehearsal,
+confirm the restored release is still the latest `main`, then rerun its existing
+**Deploy DEV** run to refresh the normal success record. Do not rerun CI or rebuild
+the immutable release. For a real incident, resume delivery with a corrective
+release through the normal deployment and acceptance steps.
 
 ## Access and provisioning procedure
 

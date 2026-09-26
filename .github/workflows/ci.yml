@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 2
       # Semgrep inspects source code before application tests or compilation.
       - name: Install Semgrep
         run: |
@@ -28,6 +30,8 @@ jobs:
             --config p/javascript --config p/react --config p/java \
             --error --strict --metrics=off \
             frontend/src backend/src
+      - name: Keep Oracle migrations append-only
+        run: python3 scripts/check_migration_changes.py
       - name: Test AWS image preparation and frontend configuration
         run: python3 -m unittest discover -s tests -p test_aws_images.py -v
       - name: Test release publication safeguards
@@ -36,6 +40,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p 'test_aws_deployment.py' -v
           python3 -m unittest discover -s tests -p 'test_aws_promotion.py' -v
+          python3 -m unittest discover -s tests -p 'test_aws_recovery.py' -v
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'

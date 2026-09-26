@@ -1,0 +1,123 @@
+name: Recover deployment
+run-name: Recover AWS ${{ inputs.environment }} to ${{ inputs.release_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Existing AWS environment to recover
+        type: choice
+        options: [dev, uat, prod]
+        required: true
+      release_id:
+        description: Full SHA of a release previously verified in this same environment
+        type: string
+        required: true
+      previous_run_id:
+        description: Successful original DEV or promotion run ID for that release and environment
+        type: string
+        required: true
+      verify_only:
+        description: Check recovery prerequisites without changing AWS (recommended first)
+        type: boolean
+        default: true
+        required: true
+      confirm_recovery:
+        description: I reviewed the incident and authorize application-only recovery; database state is retained
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: delivery-lab-aws
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, delivery-lab]
+    timeout-minutes: 50
+    environment: aws-${{ inputs.environment }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      TARGET_ENV: ${{ inputs.environment }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      PREVIOUS_RUN: ${{ inputs.previous_run_id }}
+      VERIFY_ONLY: ${{ inputs.verify_only }}
+      CONFIRM_RECOVERY: ${{ inputs.confirm_recovery }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check recovery authorization
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from lab import write_json
+          write_json('.local/aws-recovery-receipt.json', {'status': 'failed',
+                     'environment': os.environ['TARGET_ENV'], 'release': os.environ['RELEASE_ID']})
+          if os.environ['VERIFY_ONLY'] != 'true' and os.environ['CONFIRM_RECOVERY'] != 'true':
+              raise SystemExit('Applying recovery requires explicit confirmation.')
+          PY
+      - name: Authenticate to the selected AWS environment
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEV_ROLE_ARN || vars.AWS_PROMOTION_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: recover-${{ github.run_id }}
+          role-duration-seconds: 7200
+          unset-current-credentials: true
+      - name: Verify or restore a previously successful release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          options=()
+          if [[ "$VERIFY_ONLY" == "true" ]]; then options+=(--verify-only); fi
+          if [[ "$CONFIRM_RECOVERY" == "true" ]]; then options+=(--confirm-recovery); fi
+          python3 scripts/recover_aws_release.py \
+            --environment "$TARGET_ENV" --release "$RELEASE_ID" --previous-run-id "$PREVIOUS_RUN" \
+            --repository "$GITHUB_REPOSITORY" --account "$AWS_ACCOUNT_ID" --region "$AWS_REGION" \
+            --require-role --output .local/aws-recovery-receipt.json "${options[@]}"
+      - name: Record recovery result
+        run: |
+          python3 - <<'PY'
+          import json, os
+          result = json.load(open('.local/aws-recovery-receipt.json'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"AWS {result['environment'].upper()}: **{result['status']}**.\n\n")
+              summary.write(f"Application: `{result['from_release']}` → `{result['release']}`.\n\n")
+              summary.write('Migration bundle unchanged; no SQL migration, database restore or image rebuild performed.\n\n')
+              summary.write(f"Cleanup remains {result['expires_at']} UTC.\n")
+              if result.get('url'):
+                  summary.write(f"\nVerified application: {result['url']}\n")
+          PY
+      - name: Collect failure diagnostics
+        if: failure()
+        continue-on-error: true
+        run: |
+          python3 scripts/aws_diagnostics.py --environment "$TARGET_ENV" \
+            --account "$AWS_ACCOUNT_ID" --region "$AWS_REGION" --require-role \
+            --output .local/aws-recovery-diagnostics.json
+      - name: Store recovery evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: aws-recovery-${{ inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/aws-recovery-receipt.json
+            .local/aws-recovery-diagnostics.json
+          if-no-files-found: warn
+          retention-days: 30

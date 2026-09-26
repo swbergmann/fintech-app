@@ -104,3 +104,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
           overwrite: true
+      - name: Collect failure diagnostics
+        if: failure()
+        continue-on-error: true
+        run: |
+          python3 scripts/aws_diagnostics.py --environment "dev" \
+            --account "$AWS_ACCOUNT_ID" --region "$AWS_REGION" --require-role \
+            --output .local/aws-deployment-diagnostics.json
+      - name: Store failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: aws-diagnostics-dev-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/aws-deployment-diagnostics.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -68,6 +68,15 @@ def validate(region):
         for container in definition['ContainerDefinitions']:
             require(all(not value['Name'].startswith('DB_ADMIN_') for value in container.get('Secrets', [])),
                     f'{task}: administrator secrets must be confined to the separate bootstrap task')
+    application = templates['application']['Resources']
+    require(set(application) == {'ApplicationTask', 'ApplicationService'},
+            'Recovery supports an application template containing only the ECS task and service')
+    backend = next(c for c in application['ApplicationTask']['Properties']['ContainerDefinitions']
+                   if c['Name'] == 'backend')
+    require({item['Name']: item['Value'] for item in backend['Environment']}.get('DB_MIGRATE') == 'false',
+            'Application startup/recovery must never run Flyway migrations')
+    require(application['ApplicationService']['Properties']['DeploymentConfiguration']['DeploymentCircuitBreaker']
+            == {'Enable': True, 'Rollback': True}, 'Keep the existing ECS service failure rollback enabled')
     networks = environment['Mappings']['Network']
     vpcs = []
     for name in ('dev', 'uat', 'prod'):
