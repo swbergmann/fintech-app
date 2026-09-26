@@ -28,6 +28,8 @@ jobs:
             --config p/javascript --config p/react --config p/java \
             --error --strict --metrics=off \
             frontend/src backend/src
+      - name: Test AWS image preparation and frontend configuration
+        run: python3 -m unittest discover -s tests -p test_aws_images.py -v
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'

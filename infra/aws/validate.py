@@ -56,6 +56,18 @@ def validate(region):
             require(match[2] in exports[match[1]], f'{name}: missing export for {expression}')
 
     environment = templates['environment']
+    secret = environment['Resources']['ApplicationDatabaseSecret']['Properties']['GenerateSecretString']
+    require(20 <= secret['PasswordLength'] <= 30 and secret['ExcludePunctuation'],
+            'AWS APP passwords must be 20–30 alphanumeric bytes for Oracle 19c and bootstrap validation')
+    # Administrator credentials must stay out of the normal application and Flyway tasks.
+    for template, task in (('application', 'ApplicationTask'), ('migration', 'MigrationTask')):
+        definition = templates[template]['Resources'][task]['Properties']
+        require(definition['ExecutionRoleArn'] == {
+            'Fn::ImportValue': {'Fn::Sub': '${EnvironmentStackName}-TaskExecutionRoleArn'}},
+            f'{task}: must use the restricted application execution role')
+        for container in definition['ContainerDefinitions']:
+            require(all(not value['Name'].startswith('DB_ADMIN_') for value in container.get('Secrets', [])),
+                    f'{task}: administrator secrets must be confined to the separate bootstrap task')
     networks = environment['Mappings']['Network']
     vpcs = []
     for name in ('dev', 'uat', 'prod'):

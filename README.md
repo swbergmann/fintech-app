@@ -4,9 +4,10 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 
 **Start here:** [Local setup](docs/local-setup.md) → [GitHub setup](docs/github-setup.md) → [Case study walkthrough](docs/case-study.md).
 
-**AWS migration — steps 1–2:** [CloudFormation infrastructure and access](infra/aws/README.md)
-define isolated AWS DEV, UAT and PROD foundations with an eight-hour cleanup schedule;
-the existing delivery workflows still target the local lab.
+**AWS migration — steps 1–3:** [Infrastructure and application preparation](infra/aws/README.md)
+provide isolated AWS foundations with eight-hour cleanup, configurable frontend routing,
+an Oracle bootstrap task and Linux/x86-64 image preparation. The existing deployment
+workflows still target the local lab; connecting AWS deployments is the next step.
 
 ## What you get
 

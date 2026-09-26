@@ -275,7 +275,8 @@ Resources:
       GenerateSecretString:
         SecretStringTemplate: '{"username":"APP"}'
         GenerateStringKey: password
-        PasswordLength: 32
+        # Oracle 19c passwords are limited to 30 bytes; local Free 23 uses a separate secret.
+        PasswordLength: 30
         ExcludePunctuation: true
         IncludeSpace: false
         RequireEachIncludedType: true
@@ -478,6 +479,8 @@ Outputs:
   DatabaseAdminSecretArn:
     Description: For a separate database bootstrap role; never grant this to application tasks.
     Value: !GetAtt Database.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseAdminSecretArn'
   DatabaseInstanceIdentifier:
     Value: !Ref Database
   FrontendTargetGroupArn:
