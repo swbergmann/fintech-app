@@ -4,9 +4,11 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 
 **Start here:** [Local setup](docs/local-setup.md) → [GitHub setup](docs/github-setup.md) → [Case study walkthrough](docs/case-study.md).
 
-**AWS migration — steps 1–7:** [AWS deployment guide](infra/aws/README.md)
+**AWS migration — steps 1–8:** [AWS deployment guide](infra/aws/README.md)
 describes disposable foundations, ECR publication, automatic **AWS DEV** deployment
 and manual **AWS UAT/PROD** promotion, plus controlled application recovery.
+The [final transition demonstration](docs/aws-transition.md) records the end-to-end
+checks, human acceptance, live evidence and remaining limitations.
 The existing Mac Actions runner controls CloudFormation/ECS and runs smoke tests;
 the frontend/backend run on Fargate, and Oracle runs on RDS. DEV must be explicitly
 provisioned for an eight-hour session, as must each promotion target.
@@ -93,6 +95,7 @@ Replace `YOUR_RELEASE_ID` with the printed value. GitHub releases use the full c
 | `scripts/aws_deployment.py` | Shared AWS deployment engine for DEV, UAT and PROD |
 | `scripts/recover_aws_release.py` | Verify recovery prerequisites and restore only application release parameters |
 | `scripts/aws_diagnostics.py` | Collect bounded failure state without secret values |
+| `scripts/verify_aws_transition.py` | Read-only comparison of release evidence and live AWS environments |
 | `scripts/promote_aws_release.py` | Verify GitHub deployment evidence and enforce AWS promotion gates |
 | `scripts/lab.py` | Install, deploy, enforce promotion order, record evidence, stop environments |
 | `scripts/smoke.py` | Verify frontend version, backend version, health, validation, and real database CRUD |

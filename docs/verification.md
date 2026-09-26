@@ -64,3 +64,13 @@ The new recovery workflow itself still needs a GitHub run after merge. The live
 rehearsal tested two previously successful releases with identical migration
 bundles; it did not inject a deployment failure, exercise automatic ECS rollback,
 reverse a database migration or restore an RDS backup.
+
+## Final transition exercise — 26 September 2026
+
+The subsequent [AWS transition record](aws-transition.md) is the current source
+for the final demonstration's run IDs, acceptance status and live observations.
+The local suite now passes **119 Python tests**, including five audit tests for
+partial results, mismatched evidence, wrong runtime images, shared resources and
+replacement of stale success records. CloudFormation and workflow validation
+also pass. These are verification-helper changes; the demonstrated application
+release remains the previously built main SHA identified in that record.

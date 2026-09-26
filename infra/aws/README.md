@@ -1,4 +1,4 @@
-# AWS infrastructure and CI/CD delivery: steps 1–7
+# AWS infrastructure and CI/CD delivery: steps 1–8
 
 The lab uses CloudFormation to provision DEV, UAT and PROD in **Ireland
 (`eu-west-1`)**. Step 2 establishes GitHub OIDC access and creates the environment
@@ -7,7 +7,8 @@ bootstrap task. Step 4 extends CI to publish the two application images to ECR
 and store their digests. Step 5 connects **Deploy DEV** to CloudFormation,
 ECS/Fargate and RDS Oracle. Step 6 enables manual **AWS UAT/PROD** promotion
 with verified prior-stage evidence and human acceptance before PROD. Step 7 adds
-controlled application recovery and failure diagnostics.
+controlled application recovery and failure diagnostics. Step 8 verifies the
+complete delivery chain and records the final demonstration and acceptance evidence.
 
 **This is a disposable academic lab:** provisioning schedules deletion of selected
 environments and their fictional data **eight hours after the foundations are ready**.
@@ -741,6 +742,20 @@ confirm the restored release is still the latest `main`, then rerun its existing
 **Deploy DEV** run to refresh the normal success record. Do not rerun CI or rebuild
 the immutable release. For a real incident, resume delivery with a corrective
 release through the normal deployment and acceptance steps.
+
+## Demonstrate and complete the transition (step 8)
+
+Follow the [final demonstration record](../../docs/aws-transition.md) for the
+ordered CI, DEV, recovery, UAT, human acceptance and PROD exercise. It includes
+links to observed GitHub runs and explicitly distinguishes local tests from live
+deployments. Keep the environment deadlines and total budget in force.
+
+The read-only `scripts/verify_aws_transition.py` helper validates the selected
+deployment chain against its original CI artifacts and the live AWS resources.
+It compares ECS image digests, task health, HTTP identities and environment
+resource isolation. A DEV/UAT-only audit explicitly reports that all three
+environments have **not** yet been verified; it cannot substitute for human UAT
+or create PROD acceptance evidence.
 
 ## Access and provisioning procedure
 

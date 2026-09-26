@@ -4,6 +4,9 @@
 
 Treat this project as the initial, deliberately limited implementation for an eight-person team. The app is a vehicle for demonstrating changes, tests, migrations, reviews, releases, and operational feedback.
 
+For the completed AWS implementation, use the [final transition demonstration](aws-transition.md)
+to distinguish live evidence, local checks, human acceptance and limitations.
+
 ## Suggested demonstration
 
 | Step | Human action | Automated evidence |
