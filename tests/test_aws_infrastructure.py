@@ -37,12 +37,6 @@ class ProvisionSafetyTests(unittest.TestCase):
             aws.verify()
         aws.call.assert_called_once_with('sts', 'get-caller-identity')
 
-    def test_cidr_rejects_broad_private_and_ipv6_networks(self):
-        for value in ('0.0.0.0/0', '8.8.8.0/24', '127.0.0.1/32', '10.1.1.1/32', '::1/128'):
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                provision.client_cidr(value)
-        self.assertEqual(provision.client_cidr('8.8.8.8/32'), '8.8.8.8/32')
-
     def test_expiry_is_eight_hours(self):
         before = datetime.now(timezone.utc) + timedelta(hours=8)
         value = datetime.fromisoformat(provision.expiry()).replace(tzinfo=timezone.utc)
@@ -56,6 +50,7 @@ class ProvisionSafetyTests(unittest.TestCase):
         aws.describe = Mock(return_value={'Parameters': []})
         aws.status = Mock()
         aws.provision('8.8.8.8/32', ('dev',))
+        self.assertEqual(aws.environment.call_args.args[1], '0.0.0.0/0')
         self.assertEqual([call.args[0] for call in aws.environment.call_args_list], ['dev'])
         self.assertEqual([call.args[0] for call in aws.deploy.call_args_list], ['delivery-lab-shared', 'delivery-lab-dev'])
 

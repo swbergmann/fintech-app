@@ -31,8 +31,7 @@ a failing ECS deployment or demonstrate restoration from an RDS backup.
 
 ## Human acceptance
 
-Open the UAT URL from the successful promotion summary while using the permitted
-public IPv4 address. Confirm the UAT label and the selected release SHA. Then:
+Open the public UAT URL from the successful promotion summary. Confirm the UAT label and the selected release SHA. Then:
 
 1. Add a fictional customer, reload and confirm persistence.
 2. Remove that customer, reload and confirm removal.
@@ -99,19 +98,18 @@ this exercise does not deliberately merge failing application code into `main`.
 
 ### Resume after the network interruption
 
-The configured client restriction remains `46.124.151.210/32`. During UAT
-verification the observed public address changed to `185.143.182.41`, then
-`185.143.182.1`. No access rules were broadened or changed, and no cleanup
-deadlines were extended. Restore the original connection or establish a stable
-public IPv4 address before continuing. If it is a new stable address, update
-`AllowedClientCidr` through CloudFormation while preserving all other parameters,
-especially `ExpiresAt`, and update `AWS_CLIENT_CIDR` in GitHub's
-`aws-infrastructure` environment. Reprovisioning DEV/UAT just to change access
-would unnecessarily reset their session deadlines.
+The historical runs above used an IP allowlist. The current provisioner opens the
+application load balancer to public IPv4 access, and deployment, promotion,
+recovery and audit scripts no longer require a stable runner address.
+After merging this change, explicitly provision the environments needed for a
+new session and use a CI/Deploy DEV run from the new commit. Existing stacks need
+a CloudFormation update or recreation before their old firewall rule changes.
 
-Then rerun UAT run `36242500117` with its original release and DEV evidence.
-Require a passed receipt before requesting human UAT or promoting to PROD.
-The cancelled attempt is useful incident evidence, not a promotion prerequisite.
+Complete a fresh DEV-to-UAT promotion, then record real human UAT acceptance
+before PROD. Old cancelled attempts remain incident evidence and must not count
+as successful promotion receipts. Use the normal infrastructure `delete` between
+sessions; use **AWS final cleanup** only at the end of the project, after saving
+the case-study evidence (see [cleanup instructions](../infra/aws/README.md#daily-sessions-versus-permanent-project-cleanup)).
 
 ## Limits of the evidence
 
@@ -124,7 +122,7 @@ The cancelled attempt is useful incident evidence, not a promotion prerequisite.
 - Runtime checks establish a dated observation, not continuous monitoring or
   future availability. DEV/UAT/PROD are separate resources within one lab account
   and region; this is not multi-account isolation or a high-availability design.
-- The lab uses fictional data and a restricted HTTP endpoint. Authentication,
+- The lab uses fictional data and a public HTTP endpoint. Authentication,
   production TLS/domain setup, load testing, operational alerting and database
   disaster recovery remain outside this demonstration.
 - Scheduled cleanup is configured, but its future success and final invoiced

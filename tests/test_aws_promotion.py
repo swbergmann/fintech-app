@@ -280,7 +280,6 @@ class PromotionGateTests(unittest.TestCase):
                     patch.object(promotion, 'validate_release', return_value=receipt()), \
                     patch.object(promotion, 'Aws', return_value=aws), \
                     patch.object(promotion, 'verify_previous_environment'), \
-                    patch.object(promotion, 'check_runner_network'), \
                     patch.object(promotion, 'resolve_images', return_value={}), \
                     patch.object(promotion, 'Deployment', return_value=engine) as constructor:
                 if mode in ('wrong_role', 'deploy_failure'):

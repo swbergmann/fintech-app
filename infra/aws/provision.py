@@ -7,7 +7,6 @@ database passwords or creates application tasks. An eight-hour expiry is require
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-import ipaddress
 import json
 from pathlib import Path
 import subprocess
@@ -16,13 +15,6 @@ import sys
 ROOT = Path(__file__).resolve().parent
 PROJECT = 'delivery-lab'
 ENVIRONMENTS = ('dev', 'uat', 'prod')
-
-
-def client_cidr(value):
-    network = ipaddress.ip_network(value, strict=True)
-    if network.version != 4 or network.prefixlen != 32 or not network.is_global:
-        raise ValueError('Use your public IPv4 address with /32 for this lab.')
-    return str(network)
 
 
 def expiry():
@@ -99,10 +91,11 @@ class Aws:
         self.deploy(name, 'environment.yaml', parameters)
         return name
 
-    def provision(self, cidr, environments=ENVIRONMENTS):
+    def provision(self, cidr=None, environments=ENVIRONMENTS):
         if not environments or any(env not in ENVIRONMENTS for env in environments):
             raise ValueError('Select dev, uat, prod or all environments.')
-        cidr = client_cidr(cidr)
+        # Accept the legacy workflow input without restricting public lab access.
+        cidr = '0.0.0.0/0'
         version = self.oracle_version()
         print(f'Oracle {version}; {len(environments)} db.t3.small instance(s), 20 GiB each, Single-AZ.', flush=True)
         self.deploy(f'{PROJECT}-shared', 'shared.yaml', {'ProjectName': PROJECT})
@@ -172,15 +165,13 @@ def main():
     parser.add_argument('--account', required=True)
     parser.add_argument('--region', default='eu-west-1', choices=['eu-west-1'])
     parser.add_argument('--profile')
-    parser.add_argument('--client-cidr', help='Your public IPv4/32; required for provision.')
+    parser.add_argument('--client-cidr', help='Legacy input, ignored; the lab is publicly reachable.')
     parser.add_argument('--environment', choices=['all', *ENVIRONMENTS], default='all',
                         help='Foundations to create/refresh during provision; default: all.')
     args = parser.parse_args()
     aws = Aws(args.account, args.region, args.profile)
     aws.verify()
     if args.action == 'provision':
-        if not args.client_cidr:
-            parser.error('--client-cidr is required for provision')
         aws.provision(args.client_cidr, ENVIRONMENTS if args.environment == 'all' else (args.environment,))
     elif args.action == 'status':
         aws.status()

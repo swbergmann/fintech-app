@@ -106,12 +106,12 @@ def validate(region):
                         number <= schema.get('MaxValue', float('inf')), f'{name}: invalid {key}')
         missing = {key for key, schema in environment['Parameters'].items()
                    if 'Default' not in schema and key not in values}
-        require(missing == {'AllowedClientCidr', 'OracleEngineVersion', 'ExpiresAt'},
+        require(missing == {'OracleEngineVersion', 'ExpiresAt'},
                 f'{name}: unexpected required inputs {sorted(missing)}')
     require(all(not a.overlaps(b) for a, b in itertools.combinations(vpcs, 2)),
             'Environment VPC address ranges overlap')
     print(f'Validated {len(paths)} templates, stack references, network isolation and 3 parameter profiles.')
-    print('No AWS calls or deployments. Client CIDR, Oracle version and expiry remain deployment inputs.')
+    print('No AWS calls or deployments. Public application ingress; Oracle version and expiry remain deployment inputs.')
 
 
 if __name__ == '__main__':

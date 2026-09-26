@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 
-from aws_deployment import (Aws, Deployment, PROJECT, check_foundation, check_runner_network,
+from aws_deployment import (Aws, Deployment, PROJECT, check_foundation,
                             outputs, resolve_images, validate_release)
 from lab import now, write_json
 from promote_aws_release import GitHub, same_release, verify_previous_environment
@@ -65,7 +65,6 @@ def audit(args):
             verify_previous_environment(aws, receipt)
             foundation = aws.describe(f'{PROJECT}-{environment}')
             values = check_foundation(foundation, aws.account, environment=environment)
-            check_runner_network(values['AllowedClientCidr'])
             engine = Deployment(aws, foundation, directory / 'release', data, environment)
             tasks = engine.verify_service(receipt['service_arn'], receipt['task_definition_arn'], runtime)
             url = 'http://' + values['LoadBalancerDnsName']

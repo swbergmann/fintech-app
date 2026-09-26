@@ -23,14 +23,15 @@ process does not leave successfully created environments without a deadline.
 | `shared.yaml` | `delivery-lab-shared` | Two private ECR repositories, shared across DEV, UAT and PROD. Immutable image tags; repositories retained on deletion. |
 | `environment.yaml` | `delivery-lab-dev`, `delivery-lab-uat`, `delivery-lab-prod` | A separate VPC, subnets, security groups, RDS Oracle instance, secrets, ECS cluster, load balancer, logs, task IAM roles and an expiry schedule per environment. |
 | `migration.yaml` | `delivery-lab-dev-migration`, etc. | Separate Fargate bootstrap and Flyway task definitions using the same backend image. The bootstrap alone can receive the RDS administrator secret. Registering these definitions does not execute them. |
+| `final-cleanup.yaml` | `delivery-lab-final-cleanup` | Separate IAM role for permanent project cleanup, retained without compute/storage charges for retries. |
 | `application.yaml` | `delivery-lab-dev-app`, etc. | An ECS service and task definition for the release's frontend and backend images. |
 
 CloudFormation exports connect the stacks in the same AWS account and region.
 The environment and release stacks must reference the same `SharedStackName`.
 `EnvironmentStackName` selects the foundation for each application/migration
 stack. With the default project name, deploy only one foundation per environment
-in that account and region. Reuse these templates with another `ProjectName` and
-stack names for a separate lab.
+in that account and region. The final-cleanup helper and role are intentionally scoped to `delivery-lab` in
+`eu-west-1`; a different project needs its own reviewed cleanup scope.
 
 ```mermaid
 flowchart LR
@@ -65,15 +66,15 @@ the three-container Docker Compose setup.
 - RDS resides in two isolated subnets without an internet route, is not publicly
   accessible, and accepts Oracle connections only from the environment's task
   security group. RDS storage is encrypted and backups are enabled.
-- `AllowedClientCidr` is required and has no open-internet default. Prefer the
-  operator's public IPv4 address with `/32`. The application has no login, so this
-  restriction matters even for a fictional-data lab. Deploy DEV retains the existing
-  Mac runner, whose public IPv4 must match this restriction; arbitrary GitHub-hosted
-  runners will not pass it. A preflight check rejects a changed runner IP before deployment.
+- The application load balancer accepts public IPv4 traffic (`0.0.0.0/0`).
+  `AllowedClientCidr` remains as a CloudFormation parameter/output for compatibility,
+  but the provisioner always uses public access. The legacy `AWS_CLIENT_CIDR`
+  workflow variable is ignored. Deployment no longer checks the runner's public IP.
+  Only the load balancer is public: application tasks accept traffic from its
+  security group and Oracle remains private. The app has no login and uses fictional data.
 - An optional regional ACM certificate enables HTTPS and redirects HTTP. Without
-  it, access is restricted HTTP for this academic lab. A certificate also requires
-  a matching domain and DNS record, which are not provisioned here. This is not a
-  public production security design.
+  it, this lab uses public HTTP. A certificate also requires a matching domain and
+  DNS record, which are not provisioned here. This is not a production security design.
 - The application has no AWS API permissions. The ECS execution role can pull
   only the two lab repositories, write its environment's application logs and
   inject only its APP secret. It cannot read the database administrator secret.
@@ -92,13 +93,68 @@ the three-container Docker Compose setup.
 - The shared image repositories and access stack outlive each session. Empty ECR
   repositories and idle IAM/ECS control-plane resources do not have hourly instance
   charges; stored images and cleanup logs can incur small storage charges. Delete
-  the shared/access stacks and retained repositories when the entire project ends.
+  those resources using **AWS final cleanup** only when the entire project ends.
 - The cleanup Lambda checks the account, original stack ID and current expiry.
   Recreating or extending a session cannot let an obsolete event delete the new
   session. Future app/migration stacks must be tagged `ParentStackId` with their
   foundation's stack ID; only matching children are deleted before the foundation.
   The Lambda retries failed invocations, but AWS deletion can still fail. Confirm
   deletion in CloudFormation; scheduled cleanup is not a guaranteed spending cap.
+
+## Daily sessions versus permanent project cleanup
+
+**AWS infrastructure** is unchanged: use `provision` to create the selected
+foundation and `delete` to end all active sessions. Daily deletion retains
+release images and shared access for the next session. Oracle creation still takes
+around 20–25 minutes in the observed runs, so creating infrastructure is not an
+instant power-on operation. Deletion is asynchronous: check CloudFormation for
+`DELETE_COMPLETE` before expecting all environment resources to be gone.
+
+After merging the public-access change, the next `provision` applies the public
+load-balancer rule. Existing stacks keep their old rule until updated or recreated.
+Old workflow runs use their original code: use a CI/Deploy DEV run from the new
+commit. The eight-hour expiry and existing create/delete workflow inputs remain unchanged.
+
+**AWS final cleanup** is a separate, manually started workflow for project
+retirement. It is not for daily use. On `main`, type `DELETE delivery-lab` to run it.
+It waits for application, migration and foundation deletion, removes shared access
+and the cleanup Lambda, deletes the ECR repositories **including all releases**,
+and removes project-owned snapshots, retained automated backups, secrets and logs.
+It checks for remaining resources and stores `final-cleanup.json` as evidence;
+failed deletion, API access errors and leftovers produce a failed run. Snapshots
+and secrets must have project ownership tags; ambiguous resources are reported
+rather than deleting unrelated data. API pagination is handled by AWS CLI.
+
+The role uses the existing `aws-infrastructure` GitHub environment and its account
+and region variables, with the existing `main` branch restriction. Install it once
+with the administrator's existing AWS profile (no new credentials or GitHub variables):
+
+```bash
+python3 infra/aws/install_final_cleanup.py --profile default --account 637423555881
+```
+
+This updates the access template to retain the shared GitHub OIDC provider and
+creates a separate IAM-only cleanup stack. It does not create environments or run
+the destructive workflow. Both infrastructure templates remain version-controlled.
+
+Final cleanup removes deployment/publishing roles, so subsequent CI runs cannot
+upload fresh images or recreate lab resources. The dedicated cleanup IAM role,
+its CloudFormation stack and the OIDC provider remain to allow retries; none
+provisions running compute or stored application data ([IAM pricing](https://aws.amazon.com/iam/faqs/),
+[CloudFormation pricing](https://aws.amazon.com/cloudformation/pricing/)). To restart the project
+**after final cleanup**, bootstrap `access.yaml` again using the retained provider's
+ARN as `ExistingOidcProviderArn`, then provision and publish a new release.
+For ordinary daily work, continue using the original **AWS infrastructure** workflow.
+
+The cleanup scope is this repository's project in Ireland (`eu-west-1`), not
+unrelated AWS resources or other regions. It reports unexpected tagged EC2/storage
+resources without deleting them automatically. Review any reported leftovers.
+Historical usage can appear in billing later; a passing cleanup report is an
+observed resource check, not a prediction of the entire account's invoice.
+
+Official API references: [ECR repository and image deletion](https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_DeleteRepository.html),
+[CloudFormation retention behavior](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-attribute-deletionpolicy.html),
+[RDS retained backup deletion](https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DeleteDBInstanceAutomatedBackup.html).
 
 ## Budget for an eight-hour session
 
@@ -128,13 +184,12 @@ application deployment costs, not charges incurred by an empty ECS cluster.
 ## Required deployment inputs
 
 `parameters/dev.json`, `uat.json` and `prod.json` are partial CloudFormation
-parameter profiles. They intentionally omit three required inputs rather than
+parameter profiles. They intentionally omit two required inputs rather than
 inventing values:
 
-1. `AllowedClientCidr`: the operator's permitted public IPv4 range.
-2. `OracleEngineVersion`: an exact, available Oracle 19c SE2 version in the chosen
+1. `OracleEngineVersion`: an exact, available Oracle 19c SE2 version in the chosen
    region, used consistently across all three environments.
-3. `ExpiresAt`: an explicit UTC cleanup time; the helper computes eight hours.
+2. `ExpiresAt`: an explicit UTC cleanup time; the helper computes eight hours.
 
 These templates use **RDS Oracle SE2 with the License Included model**, whereas
 local Compose uses Oracle Database Free 23.26. This is an engine/edition change,
@@ -350,9 +405,8 @@ release if `main` has already advanced. It downloads `release-<SHA>` and
 The existing `[self-hosted, delivery-lab]` Mac runner still controls deployment.
 It needs Python 3.10+, AWS CLI v2, GitHub CLI, internet access, and its runner
 service online. **The deployed application runs in AWS**, not on the runner.
-This deployment job does not use Docker or Docker Compose. Keeping this runner
-also lets the existing public IPv4 restriction protect the load balancer without
-opening it to arbitrary GitHub-hosted runner addresses.
+This deployment job does not use Docker or Docker Compose. The runner needs
+internet access, but no fixed public IP address.
 
 Create a GitHub environment named **aws-dev**, with a custom deployment branch
 rule permitting only **main** and no required reviewer for this automatic DEV
@@ -378,9 +432,9 @@ infrastructure workflows share a concurrency group to serialize lab operations.
 1. Validate the full source SHA, repository/CI run, account/region, archive and
    manifest checksums, expected repositories and both immutable image references.
 2. Require a ready, owned DEV foundation with at least an hour before its existing
-   cleanup deadline. Verify the runner's public IPv4 matches `AllowedClientCidr`.
+   cleanup deadline.
    Missing/expired foundations fail clearly; deployments never provision or extend
-   a session automatically. The restricted HTTP baseline is supported; a configured
+   a session automatically. The public HTTP baseline is supported; a configured
    certificate requires adding a matching hostname to the smoke-test configuration.
 3. Compare the ECR tag's digest with the published metadata. For an OCI index,
    resolve its single Linux/amd64 image for the later running-container check.
@@ -416,15 +470,15 @@ before CloudFormation can recreate it; the deployment helper does not delete it.
 
 ### Start a short DEV session and inspect the result
 
-In **AWS infrastructure → Run workflow**, select `provision` and `dev`. Update
-its `AWS_CLIENT_CIDR` environment variable if the Mac's public IPv4 has changed.
+In **AWS infrastructure → Run workflow**, select `provision` and `dev`.
+No IP configuration is required.
 The selected foundation uses the smallest configured sizes and receives its own
 eight-hour deadline. UAT/PROD need not be provisioned for a DEV demonstration.
 
 After the foundation is ready, merge a PR so CI publishes a release and triggers
 Deploy DEV. If the latest release previously failed only because its foundation
 was absent, rerun that **Deploy DEV** run. The deployment summary contains the
-AWS application URL and cleanup time; access works from the permitted IPv4 only.
+public AWS application URL and cleanup time.
 Download the DEV receipt from the workflow's **Artifacts** section. It is retained
 for 30 days, while the actual environment remains temporary.
 
@@ -497,8 +551,7 @@ that session; retain the approved small lab sizes, including simulated PROD.
 
 DEV deployment, promotion and infrastructure operations share the
 `delivery-lab-aws` concurrency group. Avoid simultaneous local deployment commands,
-which are outside GitHub's concurrency control. The Mac must remain online and its
-public IPv4 must match the target's `AllowedClientCidr`.
+which are outside GitHub's concurrency control. The Mac must remain online and have internet access.
 
 ### Verification and deployment sequence
 
@@ -522,7 +575,7 @@ public IPv4 must match the target's `AllowedClientCidr`.
 5. Verify temporary credentials for the selected environment role. Confirm the
    previous foundation has not been recreated and its application stack still
    identifies the verified release, task definition and image digests. Require a
-   ready target foundation, correct runner IPv4 and matching ECR digests.
+   ready target foundation and matching ECR digests.
 6. Use the shared `scripts/aws_deployment.py` engine to apply the **archived**
    migration/application templates, bootstrap the target's Oracle APP schema,
    run Flyway, deploy the same frontend/backend digests, verify the healthy ECS
@@ -613,7 +666,7 @@ replace these original GitHub deployment records.
 
 1. The target environment is owned, ready, has at least an hour before cleanup,
    and belongs to the same foundation session as the successful target deployment.
-   The runner's public IPv4 must still match its access restriction. Busy stacks,
+   Busy stacks,
    `UPDATE_ROLLBACK_FAILED`, `ROLLBACK_COMPLETE`, missing environments or a stopped
    lab fail closed. Resolve the original stack problem first.
 2. The selected successful main-branch deployment and its CI artifacts pass the
@@ -797,7 +850,7 @@ The GitHub environment **`aws-infrastructure`** contains these non-secret variab
 | `AWS_ACCOUNT_ID` | Expected account (`637423555881`) checked before operations. |
 | `AWS_REGION` | `eu-west-1`. |
 | `AWS_INFRASTRUCTURE_ROLE_ARN` | `InfrastructureRoleArn` from the access stack. |
-| `AWS_CLIENT_CIDR` | Current operator public IPv4 address with `/32`. Update it when your public IP changes. |
+| `AWS_CLIENT_CIDR` | Legacy input, now ignored. It may be empty; no IP updates are needed. |
 
 Its deployment branch policy allows `main`. An initial temporary feature-branch
 exception can be used to verify OIDC before merging and must be removed afterwards.
@@ -817,7 +870,7 @@ The same helper can run locally without merging this branch:
 ```bash
 python3 infra/aws/provision.py verify --profile default --account 637423555881
 python3 infra/aws/provision.py provision --profile default --account 637423555881 \
-  --client-cidr YOUR_PUBLIC_IPV4/32 --environment dev
+  --environment dev
 python3 infra/aws/provision.py status --profile default --account 637423555881
 # Only when intentionally ending a session and deleting its fictional data:
 python3 infra/aws/provision.py delete --profile default --account 637423555881

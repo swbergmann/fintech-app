@@ -1,0 +1,76 @@
+name: AWS final cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type DELETE delivery-lab to permanently remove all environments, images, snapshots and AWS access used by deployment.'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delivery-lab-aws
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Remove project resources and verify completion
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    environment: aws-infrastructure
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check project retirement confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = 'DELETE delivery-lab'
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Test final cleanup safeguards
+        run: python3 -m unittest discover -s tests -p test_aws_final_cleanup.py -v
+      - name: Authenticate with the separate final cleanup role
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/delivery-lab-final-cleanup
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-duration-seconds: 7200
+          role-session-name: final-cleanup-${{ github.run_id }}
+      - name: Permanently retire the project in Ireland
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          python3 infra/aws/final_cleanup.py --account "$AWS_ACCOUNT_ID" \
+            --region "$AWS_REGION" --confirm 'DELETE delivery-lab' --output final-cleanup.json
+      - name: Store cleanup result
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: aws-final-cleanup-${{ github.run_id }}
+          path: final-cleanup.json
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Summarize verified cleanup
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path('final-cleanup.json')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              if not path.exists():
+                  summary.write('Cleanup was not verified. Check the failed step.\n')
+              else:
+                  result = json.loads(path.read_text())
+                  summary.write(f"Final cleanup: **{result['status']}**.\n\n")
+                  summary.write('Scope: delivery-lab in eu-west-1. See the JSON artifact for remaining resources.\n\n')
+                  summary.write('The free cleanup role and GitHub identity provider remain. Previous usage can appear in billing later.\n')
+          PY

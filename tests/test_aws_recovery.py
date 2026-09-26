@@ -229,7 +229,7 @@ class RecoveryGateTests(unittest.TestCase):
                 engine.verify.side_effect = ValueError('smoke failed')
             with self.subTest(mode=mode), patch.object(recovery, 'GitHub', return_value=github), \
                     patch.object(recovery, 'current_execution', return_value={'kind': 'local'}), \
-                    patch.object(recovery, 'Aws', return_value=aws), patch.object(recovery, 'check_runner_network'), \
+                    patch.object(recovery, 'Aws', return_value=aws), \
                     patch.object(recovery, 'check_application_template'), \
                     patch.object(recovery, 'load_release', return_value=(receipt(), Path('/unused'))), \
                     patch.object(recovery, 'find_ci', return_value='456'), \

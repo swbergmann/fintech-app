@@ -109,3 +109,10 @@ Generated passwords, installed releases, and deployment receipts stay in `.local
 See [verification results](docs/verification.md) for what has been tested and what still requires a running Docker engine. A passing unit test is not presented as a successful Oracle deployment.
 
 Recovery instructions and the database limitations are in [the AWS recovery guide](infra/aws/README.md#deployment-recovery-step-7).
+
+### AWS session controls
+
+Use **AWS infrastructure** → `provision` / `delete` for daily sessions. The
+application URL is public; no stable runner IP is required. At the end of the
+project, use the separate **AWS final cleanup** workflow to remove environments
+and retained billable data. See the [one-time setup and cleanup scope](infra/aws/README.md#daily-sessions-versus-permanent-project-cleanup).

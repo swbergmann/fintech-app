@@ -125,12 +125,6 @@ class DeploymentGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'ownership'):
             deploy.check_foundation(stack, ACCOUNT)
 
-    def test_runner_ip_must_match_the_restricted_client_cidr(self):
-        with patch.object(deploy.urllib.request, 'urlopen') as request:
-            request.return_value.__enter__.return_value.read.return_value = b'9.9.9.9\n'
-            with self.assertRaisesRegex(ValueError, 'Runner public IPv4'):
-                deploy.check_runner_network('8.8.8.8/32')
-
     def test_task_launch_failure_blocks_deployment(self):
         self.aws.call.return_value = {'failures': [{'reason': 'RESOURCE:MEMORY'}], 'tasks': []}
         arn = f'arn:aws:ecs:eu-west-1:{ACCOUNT}:task-definition/delivery-lab-dev-migration-bootstrap:1'
