@@ -32,6 +32,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_aws_images.py -v
       - name: Test release publication safeguards
         run: python3 -m unittest discover -s tests -p test_aws_release.py -v
+      - name: Test AWS DEV deployment gates
+        run: python3 -m unittest discover -s tests -p test_aws_deployment.py -v
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'

@@ -11,41 +11,96 @@ permissions:
   actions: read
 
 concurrency:
-  group: delivery-lab-local
+  group: delivery-lab-aws
   cancel-in-progress: false
 
 jobs:
   deploy:
-    # Never execute pull-request or fork code on the local runner.
+    # Only this repository's successful main CI releases can reach AWS.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: [self-hosted, delivery-lab]
-    timeout-minutes: 45
+    timeout-minutes: 65
+    environment: aws-dev
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     env:
-      LAB_HOME: ${{ vars.LAB_HOME }}
       RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_CI_RUN: ${{ github.event.workflow_run.id }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
+      - name: Skip a superseded CI release
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          if [ "$current" = "$RELEASE_ID" ]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            echo 'Skipped: main has advanced beyond this CI release.' >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        if: steps.source.outputs.current == 'true'
         with:
           name: release-${{ github.event.workflow_run.head_sha }}
           path: .download
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-      - name: Prepare isolated settings
-        run: python3 scripts/lab.py init
-      - name: Install this release once
-        run: python3 scripts/lab.py install --archive .download/release.tar.gz
-      - name: Deploy and verify DEV
-        run: python3 scripts/lab.py deploy --release "$RELEASE_ID" --environment dev
-      - name: Record the deployment summary
+      - name: Download published image metadata
+        if: steps.source.outputs.current == 'true'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: aws-release-${{ github.event.workflow_run.head_sha }}
+          path: .download
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Authenticate to AWS DEV with temporary credentials
+        if: steps.source.outputs.current == 'true'
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: dev-${{ github.run_id }}
+          role-duration-seconds: 7200
+          unset-current-credentials: true
+      - name: Prepare Oracle, deploy ECS service and verify DEV
+        if: steps.source.outputs.current == 'true'
         run: |
-          echo "DEV passed for release $RELEASE_ID." >> "$GITHUB_STEP_SUMMARY"
-          echo 'Open http://localhost:8080 on the runner computer.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Use Promote release to request UAT for this exact release ID.' >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/deploy_aws_dev.py \
+            --archive .download/release.tar.gz --metadata .download/aws-release.json \
+            --output .local/aws-dev-receipt.json --release "$RELEASE_ID" \
+            --repository "$GITHUB_REPOSITORY" --ci-run-id "$SOURCE_CI_RUN" \
+            --account "$AWS_ACCOUNT_ID" --region "$AWS_REGION" --require-role delivery-lab-github-dev
+      - name: Record the deployment summary
+        if: steps.source.outputs.current == 'true'
+        run: |
+          python3 - <<'PY'
+          import json, os
+          receipt = json.load(open('.local/aws-dev-receipt.json'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"AWS DEV passed for `{receipt['release']}`.\n\n")
+              summary.write(f"Application: {receipt['url']} (restricted to the runner's public IPv4).\n\n")
+              summary.write(f"Cleanup: {receipt['expires_at']} UTC.\n")
+          PY
+      - name: Store AWS DEV deployment evidence
+        if: always() && steps.source.outputs.current == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: aws-dev-${{ github.event.workflow_run.head_sha }}
+          path: .local/aws-dev-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true

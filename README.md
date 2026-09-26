@@ -4,11 +4,11 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 
 **Start here:** [Local setup](docs/local-setup.md) → [GitHub setup](docs/github-setup.md) → [Case study walkthrough](docs/case-study.md).
 
-**AWS migration — steps 1–4:** [Infrastructure, application and release preparation](infra/aws/README.md)
-provide isolated AWS foundations with eight-hour cleanup, configurable frontend routing,
-an Oracle bootstrap task and Linux/x86-64 images published to ECR. CI stores their
-repository digests in an `aws-release.json` artifact. The existing deployment
-workflows still target the local lab; connecting AWS deployments is the next step.
+**AWS migration — steps 1–5:** [AWS deployment guide](infra/aws/README.md)
+describes disposable foundations, ECR publication and automatic **AWS DEV** deployment.
+The existing Mac Actions runner controls CloudFormation/ECS and runs smoke tests;
+the frontend/backend run on Fargate, and Oracle runs on RDS. DEV must be explicitly
+provisioned for an eight-hour session. AWS UAT/PROD promotion is the next step.
 
 ## What you get
 
@@ -16,14 +16,17 @@ workflows still target the local lab; connecting AWS deployments is the next ste
 - GitHub Actions build, test, and Semgrep/CodeQL security checks for pull requests and merges to `main`.
 - A release containing the frontend build, Java JAR, and deployment files; Flyway migrations are inside the JAR.
 - Main-branch CI publishes the two AWS images to ECR and records immutable digests for later AWS deployment.
-- Automatic DEV deployment after a successful main-branch build.
-- Manual UAT and PROD promotion workflows with checks that the same release passed the previous environment.
-- Three separate Docker Compose projects, Oracle containers, database volumes, application containers, and credentials.
+- Automatic AWS DEV deployment after successful main-branch CI and ECR publication.
+- Manual local UAT/PROD promotion retained until the AWS promotion workflow is implemented.
+- Three separate Docker Compose projects remain available for local development and the original demonstration.
 - Tests for the app and promotion rules, plus a real Oracle smoke test during every deployment.
 
-| Environment | Local URL | Human action |
+The local demonstration remains available through `scripts/local-demo.sh` and
+`scripts/lab.py`. GitHub's **Deploy DEV** now targets AWS instead of this table:
+
+| Local environment | Local URL | Human action |
 |---|---|---|
-| DEV | http://localhost:8080 | Review and merge a pull request; deployment then runs automatically. |
+| DEV | http://localhost:8080 | Run the local demo or explicitly install/deploy a local release. |
 | UAT | http://localhost:8081 | Manually request promotion; then perform acceptance testing. |
 | PROD | http://localhost:8082 | Confirm successful human UAT and manually request production promotion. |
 
@@ -37,15 +40,14 @@ flowchart TD
   B --> C([HUMAN: review; request changes or approve and merge])
   C --> D[AUTO: verify main and package one release on GitHub]
   D --> P[AUTO: publish AWS images to ECR and store release metadata]
-  P --> E[AUTO: local runner builds local runtime images once]
-  E --> F[AUTO: DEV migrations, deployment and smoke tests]
-  F --> G([HUMAN: request UAT promotion])
-  G --> H[AUTO: UAT migrations, same images and smoke tests]
-  H --> I([HUMAN: perform UAT, record acceptance, request PROD])
-  I --> J[AUTO: PROD migrations, same images and smoke tests]
+  P --> E[AUTO: validate release and active AWS DEV foundation]
+  E --> F[AUTO: Oracle bootstrap, Flyway migrations, ECS deployment]
+  F --> G[AUTO: verify running image digests and smoke tests]
+  G --> H[Store passed AWS DEV deployment evidence]
+  H -. Next implementation step .-> I[Controlled AWS UAT and PROD promotion]
 ```
 
-The frontend and Java application are built once for each main-branch release. After all checks pass, a separate CI job downloads that release, wraps the outputs in Linux/amd64 images, pushes them to ECR and stores their repository digests. A failed publication makes CI fail and prevents automatic local DEV deployment. During this migration stage, the local runner still creates its own local images from the same packaged outputs; local promotion reuses those recorded image IDs. Future AWS deployments will reuse the ECR digests. Neither promotion path should rebuild the application. Each Oracle instance receives the same pending Flyway migrations. Customer data is never copied between environments.
+The frontend and Java application are built once for each main-branch release. After all checks pass, CI wraps those outputs in Linux/amd64 images, publishes them to ECR and stores their digests. **Deploy DEV** verifies both artifacts from that CI run, runs separate Oracle bootstrap and Flyway tasks, and applies the ECS service through CloudFormation. It checks the running image digests and exercises frontend, API and Oracle CRUD before recording success. Deployment does not run Docker, npm or Maven. Failed CI, database tasks or smoke tests prevent a passed DEV receipt. AWS promotion is not implemented yet; the existing local promotion command still requires its own local DEV evidence.
 
 CI runs Semgrep immediately after checkout, before application tests or builds, and stops on any reported finding. It then initializes CodeQL before the existing builds and analyzes the code afterward. A separate CodeQL gate blocks release packaging on high/critical findings or missing reports. The [GitHub guide](docs/github-setup.md#semgrep-before-tests-and-builds) explains both policies and how to require the check before merging. Promotion-rule tests remain commented out in CI for the current case-study stage; security-gate tests run independently.
 

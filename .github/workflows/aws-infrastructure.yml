@@ -15,12 +15,18 @@ on:
         options: [status, provision, delete]
         default: status
         required: true
+      environment:
+        description: 'Foundations to create or refresh when provisioning (status/delete still cover all).'
+        type: choice
+        options: [dev, uat, prod, all]
+        default: dev
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: aws-infrastructure
+  group: delivery-lab-aws
   cancel-in-progress: false
 
 jobs:
@@ -62,6 +68,7 @@ jobs:
           AWS_REGION: ${{ vars.AWS_REGION }}
           AWS_CLIENT_CIDR: ${{ vars.AWS_CLIENT_CIDR }}
           REQUESTED_ACTION: ${{ inputs.action || 'verify' }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
           if [ "$REQUESTED_ACTION" != "verify" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
             echo 'Run manual infrastructure operations from main.'
@@ -69,4 +76,4 @@ jobs:
           fi
           python3 infra/aws/provision.py "$REQUESTED_ACTION" \
             --account "$AWS_ACCOUNT_ID" --region "$AWS_REGION" \
-            --client-cidr "$AWS_CLIENT_CIDR"
+            --client-cidr "$AWS_CLIENT_CIDR" --environment "$TARGET_ENVIRONMENT"

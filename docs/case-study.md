@@ -1,5 +1,7 @@
 # Case study walkthrough
 
+**Migration status:** automatic Deploy DEV now targets AWS. This guide retains the original local demonstration; see [the AWS guide](../infra/aws/README.md#automatic-aws-dev-deployment-step-5) for current deployment setup. AWS UAT/PROD promotion is the next implementation step.
+
 Treat this project as the initial, deliberately limited implementation for an eight-person team. The app is a vehicle for demonstrating changes, tests, migrations, reviews, releases, and operational feedback.
 
 ## Suggested demonstration
