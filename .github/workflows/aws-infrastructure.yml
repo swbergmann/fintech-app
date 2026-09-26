@@ -1,0 +1,72 @@
+name: AWS infrastructure
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['infra/aws/**', 'tests/test_aws_infrastructure.py', '.github/workflows/aws-infrastructure.yml']
+  push:
+    branches: [main]
+    paths: ['infra/aws/**', 'tests/test_aws_infrastructure.py', '.github/workflows/aws-infrastructure.yml']
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Provision starts a new eight-hour session; delete removes fictional lab data.'
+        type: choice
+        options: [status, provision, delete]
+        default: status
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aws-infrastructure
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate infrastructure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Validate CloudFormation and cleanup safeguards
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cfn-venv"
+          "$RUNNER_TEMP/cfn-venv/bin/python" -m pip install -r infra/aws/requirements-validation.txt
+          "$RUNNER_TEMP/cfn-venv/bin/python" infra/aws/validate.py
+          python3 -m unittest discover -s tests -p test_aws_infrastructure.py -v
+
+  infrastructure:
+    name: Access and provision AWS foundations
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    environment: aws-infrastructure
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Authenticate to AWS using temporary credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_INFRASTRUCTURE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: delivery-lab-${{ github.run_id }}
+      - name: Verify access or run the requested infrastructure operation
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_CLIENT_CIDR: ${{ vars.AWS_CLIENT_CIDR }}
+          REQUESTED_ACTION: ${{ inputs.action || 'verify' }}
+        run: |
+          if [ "$REQUESTED_ACTION" != "verify" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo 'Run manual infrastructure operations from main.'
+            exit 1
+          fi
+          python3 infra/aws/provision.py "$REQUESTED_ACTION" \
+            --account "$AWS_ACCOUNT_ID" --region "$AWS_REGION" \
+            --client-cidr "$AWS_CLIENT_CIDR"

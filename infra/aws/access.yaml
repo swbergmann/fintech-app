@@ -1,0 +1,422 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: GitHub OIDC access and CloudFormation execution permissions for the Delivery Lab.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: delivery-lab
+    AllowedPattern: '[a-z][a-z0-9-]{1,24}'
+  GitHubSubjectPrefix:
+    Type: String
+    Description: Exact sub_claim_prefix reported by the GitHub repository OIDC settings API.
+    AllowedPattern: 'repo:[A-Za-z0-9_.@-]+/[A-Za-z0-9_.@-]+'
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ''
+    Description: Reuse an existing GitHub provider if the account already has one.
+
+Conditions:
+  CreateProvider: !Equals [!Ref ExistingOidcProviderArn, '']
+
+Resources:
+  GitHubProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  RuntimeBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Maximum AWS permissions for application roles created by the lab infrastructure workflow.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Effect: Allow
+            Action: [ecr:BatchCheckLayerAvailability, ecr:GetDownloadUrlForLayer, ecr:BatchGetImage]
+            Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}/*'
+          - Effect: Allow
+            Action: [logs:CreateLogStream, logs:PutLogEvents]
+            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/delivery-lab/${ProjectName}/*'
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/*'
+
+  CloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-cloudformation'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: provision-regional-lab-resources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # EC2 network creation and several describe APIs do not support name scoping.
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:GetSecurityGroupsForVpc
+                  - ec2:CreateVpc
+                  - ec2:DeleteVpc
+                  - ec2:ModifyVpcAttribute
+                  - ec2:CreateSubnet
+                  - ec2:DeleteSubnet
+                  - ec2:ModifySubnetAttribute
+                  - ec2:CreateInternetGateway
+                  - ec2:DeleteInternetGateway
+                  - ec2:AttachInternetGateway
+                  - ec2:DetachInternetGateway
+                  - ec2:CreateRouteTable
+                  - ec2:DeleteRouteTable
+                  - ec2:AssociateRouteTable
+                  - ec2:DisassociateRouteTable
+                  - ec2:CreateRoute
+                  - ec2:DeleteRoute
+                  - ec2:ReplaceRoute
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                  - elasticloadbalancing:CreateLoadBalancer
+                  - elasticloadbalancing:DeleteLoadBalancer
+                  - elasticloadbalancing:ModifyLoadBalancerAttributes
+                  - elasticloadbalancing:CreateTargetGroup
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:ModifyTargetGroup
+                  - elasticloadbalancing:ModifyTargetGroupAttributes
+                  - elasticloadbalancing:CreateListener
+                  - elasticloadbalancing:DeleteListener
+                  - elasticloadbalancing:ModifyListener
+                  - elasticloadbalancing:AddTags
+                  - elasticloadbalancing:RemoveTags
+                  - elasticloadbalancing:Describe*
+                  - ecs:CreateCluster
+                  - ecs:DeleteCluster
+                  - ecs:UpdateClusterSettings
+                  - ecs:DescribeClusters
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:CreateService
+                  - ecs:UpdateService
+                  - ecs:DeleteService
+                  - ecs:RegisterTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:TagResource
+                  - ecs:UntagResource
+                  - ecs:ListTagsForResource
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBSubnetGroups
+                  - rds:DescribeDBEngineVersions
+                  - rds:DescribeDBSnapshots
+                  - secretsmanager:GetRandomPassword
+                  - kms:DescribeKey
+                  - logs:DescribeLogGroups
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action:
+                  - rds:CreateDBInstance
+                  - rds:ModifyDBInstance
+                  - rds:DeleteDBInstance
+                  - rds:CreateDBSubnetGroup
+                  - rds:ModifyDBSubnetGroup
+                  - rds:DeleteDBSubnetGroup
+                  - rds:CreateDBSnapshot
+                  - rds:AddTagsToResource
+                  - rds:RemoveTagsFromResource
+                  - rds:ListTagsForResource
+                Resource: !Sub 'arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:*:${ProjectName}-*'
+              - Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:PutImageTagMutability
+                  - ecr:PutImageScanningConfiguration
+                  - ecr:TagResource
+                  - ecr:UntagResource
+                  - ecr:ListTagsForResource
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}/*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:UpdateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:TagResource
+                  - secretsmanager:UntagResource
+                  - secretsmanager:GetResourcePolicy
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/*'
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:rds!db-*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/delivery-lab/${ProjectName}/*'
+              - Effect: Allow
+                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule, scheduler:GetSchedule, scheduler:DeleteSchedule]
+                Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/${ProjectName}-*'
+        - PolicyName: bounded-runtime-roles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [iam:CreateRole, iam:PutRolePermissionsBoundary]
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}/runtime/*'
+                Condition:
+                  ArnEquals:
+                    iam:PermissionsBoundary: !Ref RuntimeBoundary
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:DeleteRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}/runtime/*'
+              - Effect: Allow
+                Action: iam:GetPolicy
+                Resource: !Ref RuntimeBoundary
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}/runtime/*'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt SchedulerRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: scheduler.amazonaws.com
+              - Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: [ecs.amazonaws.com, elasticloadbalancing.amazonaws.com, rds.amazonaws.com]
+
+  GitHubInfrastructureRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-github-infrastructure'
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateProvider, !Ref GitHubProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub '${GitHubSubjectPrefix}:environment:aws-infrastructure'
+      Policies:
+        - PolicyName: manage-lab-stacks-through-cloudformation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:ListStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:DeleteStack
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-shared/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-dev/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-uat/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-prod/*'
+              - Effect: Allow
+                Action: [cloudformation:ValidateTemplate, cloudformation:GetTemplateSummary, rds:DescribeDBEngineVersions, rds:DescribeOrderableDBInstanceOptions]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+
+  CleanupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: delete-expired-lab-environments
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [cloudformation:DescribeStacks, cloudformation:DeleteStack]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-dev*/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-uat*/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-prod*/*'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt CleanupLogs.Arn
+  CleanupLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-cleanup'
+      RetentionInDays: 7
+  CleanupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-cleanup'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt CleanupRole.Arn
+      Timeout: 900
+      MemorySize: 128
+      Environment:
+        Variables:
+          PROJECT: !Ref ProjectName
+          ACCOUNT: !Ref AWS::AccountId
+      Code:
+        ZipFile: |
+          from datetime import datetime, timezone
+          import os
+          import time
+          import boto3
+          from botocore.exceptions import ClientError
+
+          cfn = boto3.client('cloudformation')
+
+          def describe(name):
+              try:
+                  return cfn.describe_stacks(StackName=name)['Stacks'][0]
+              except ClientError as error:
+                  if error.response['Error']['Code'] == 'ValidationError' and 'does not exist' in str(error):
+                      return None
+                  raise
+
+          def handler(event, context):
+              env = event['environment']
+              if env not in ('dev', 'uat', 'prod'):
+                  raise ValueError('Unknown lab environment')
+              name = os.environ['PROJECT'] + '-' + env
+              stack = describe(name)
+              if not stack or stack['StackId'] != event['stack_id']:
+                  return {'status': 'already removed or replaced'}
+              expected = ':' + os.environ['ACCOUNT'] + ':stack/' + name + '/'
+              if expected not in stack['StackId']:
+                  raise ValueError('Wrong account or stack')
+              parameters = {item['ParameterKey']: item['ParameterValue'] for item in stack['Parameters']}
+              expires = datetime.fromisoformat(parameters['ExpiresAt']).replace(tzinfo=timezone.utc)
+              if datetime.now(timezone.utc) < expires:
+                  return {'status': 'not expired'}
+              if stack['StackStatus'] == 'DELETE_IN_PROGRESS':
+                  return {'status': 'deletion already in progress'}
+              for suffix in ('-app', '-migration'):
+                  child = describe(name + suffix)
+                  if not child:
+                      continue
+                  tags = {tag['Key']: tag['Value'] for tag in child.get('Tags', [])}
+                  if tags.get('ParentStackId') != stack['StackId']:
+                      raise ValueError('Refusing to delete a child without matching ParentStackId')
+                  cfn.delete_stack(StackName=child['StackId'])
+                  while True:
+                      current = describe(child['StackId'])
+                      if not current or current['StackStatus'] == 'DELETE_COMPLETE':
+                          break
+                      if current['StackStatus'] == 'DELETE_FAILED':
+                          raise RuntimeError('Child stack deletion failed')
+                      if context.get_remaining_time_in_millis() < 45000:
+                          raise TimeoutError('Retry after child deletion completes')
+                      time.sleep(15)
+              cfn.delete_stack(StackName=stack['StackId'])
+              print('Deletion requested for', name)
+              return {'status': 'deletion requested', 'stack': name}
+  CleanupRetry:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref CleanupFunction
+      Qualifier: '$LATEST'
+      MaximumRetryAttempts: 2
+      MaximumEventAgeInSeconds: 3600
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule-group/default'
+      Policies:
+        - PolicyName: invoke-lab-cleanup
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt CleanupFunction.Arn
+
+Outputs:
+  InfrastructureRoleArn:
+    Value: !GetAtt GitHubInfrastructureRole.Arn
+  CloudFormationRoleArn:
+    Value: !GetAtt CloudFormationRole.Arn
+  RuntimeBoundaryArn:
+    Value: !Ref RuntimeBoundary
+    Export:
+      Name: !Sub '${AWS::StackName}-RuntimeBoundaryArn'
+  CleanupFunctionArn:
+    Value: !GetAtt CleanupFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CleanupFunctionArn'
+  SchedulerRoleArn:
+    Value: !GetAtt SchedulerRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-SchedulerRoleArn'
