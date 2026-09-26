@@ -2,7 +2,6 @@
 """Shared AWS deployment engine for existing, unexpired lab foundations."""
 import argparse
 from datetime import datetime, timedelta, timezone
-import ipaddress
 import json
 from pathlib import Path
 import re
@@ -10,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 import uuid
 
 from lab import extract_release, now, read_json, sha256, verify_release, write_json
@@ -78,16 +76,8 @@ def check_foundation(stack, account, minimum_minutes=60, environment='dev'):
         raise ValueError('Foundation targets another environment.')
     parameters = {p['ParameterKey']: p['ParameterValue'] for p in stack['Parameters']}
     if parameters.get('CertificateArn'):
-        raise ValueError('This restricted HTTP lab needs a configured hostname before HTTPS smoke testing.')
+        raise ValueError('This HTTP lab needs a configured hostname before HTTPS smoke testing.')
     return values
-
-
-def check_runner_network(cidr):
-    with urllib.request.urlopen('https://checkip.amazonaws.com', timeout=10) as response:
-        address = ipaddress.ip_address(response.read().decode().strip())
-    network = ipaddress.ip_network(cidr)
-    if address.version != 4 or network.prefixlen != 32 or address not in network:
-        raise ValueError('Runner public IPv4 differs from AllowedClientCidr; update the environment through CloudFormation first.')
 
 
 def resolve_images(aws, data):
@@ -273,7 +263,6 @@ def main():
                 raise ValueError('Deployment requires the configured temporary GitHub DEV role.')
             foundation = aws.describe(PROJECT + '-dev')
             values = check_foundation(foundation, aws.account)
-            check_runner_network(values['AllowedClientCidr'])
             runtime = resolve_images(aws, data)
             receipt = Deployment(aws, foundation, directory, data).deploy(runtime)
     finally:

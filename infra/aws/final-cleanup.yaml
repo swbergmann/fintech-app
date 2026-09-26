@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Separate, non-billable IAM role for permanently retiring the Delivery Lab.
+
+Parameters:
+  GitHubSubjectPrefix:
+    Type: String
+    AllowedPattern: 'repo:[A-Za-z0-9_.@-]+/[A-Za-z0-9_.@-]+'
+  GitHubProviderArn:
+    Type: String
+    AllowedPattern: 'arn:aws:iam::[0-9]{12}:oidc-provider/token.actions.githubusercontent.com'
+
+Resources:
+  FinalCleanupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: delivery-lab-final-cleanup
+      MaxSessionDuration: 7200
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub '${GitHubSubjectPrefix}:environment:aws-infrastructure'
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: retire-project
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [cloudformation:DescribeStacks, cloudformation:ListStackResources, cloudformation:GetTemplate, cloudformation:DeleteStack]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/delivery-lab-dev*/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/delivery-lab-uat*/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/delivery-lab-prod*/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/delivery-lab-shared/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/delivery-lab-access/*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/delivery-lab-cloudformation'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/delivery-lab-final-cleanup'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+              - Effect: Allow
+                Action: [ecs:ListTasks, ecs:ListClusters, ec2:DescribeVpcs, ec2:DescribeAddresses, elasticloadbalancing:DescribeLoadBalancers, elasticloadbalancing:DescribeTags, rds:DescribeDBInstances, rds:DescribeDBSnapshots, rds:DescribeDBInstanceAutomatedBackups, secretsmanager:ListSecrets, logs:DescribeLogGroups, scheduler:ListSchedules, tag:GetResources]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action: [ecs:StopTask, ecs:DescribeTasks]
+                Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/delivery-lab-*/*'
+              - Effect: Allow
+                Action: [ecr:DescribeRepositories, ecr:ListTagsForResource, ecr:DeleteRepository]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/delivery-lab/frontend'
+                  - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/delivery-lab/backend'
+              - Effect: Allow
+                Action: rds:ListTagsForResource
+                Resource: !Sub 'arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:snapshot:*'
+              - Effect: Allow
+                Action: rds:DeleteDBSnapshot
+                Resource: !Sub 'arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:snapshot:*'
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/Project: delivery-lab
+              - Effect: Allow
+                Action: rds:DeleteDBInstanceAutomatedBackup
+                Resource: !Sub 'arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:auto-backup:*'
+              - Effect: Allow
+                Action: [secretsmanager:DeleteSecret, secretsmanager:DescribeSecret]
+                Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:delivery-lab/*'
+              - Effect: Allow
+                Action: [logs:DeleteLogGroup, logs:ListTagsForResource]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/delivery-lab/delivery-lab/*'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/delivery-lab-cleanup'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/delivery-lab-cleanup:*'
+              - Effect: Allow
+                Action: [lambda:GetFunction, lambda:GetFunctionConfiguration, lambda:DeleteFunction, lambda:GetFunctionEventInvokeConfig, lambda:DeleteFunctionEventInvokeConfig, lambda:ListTags]
+                Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:delivery-lab-cleanup'
+              - Effect: Allow
+                Action: [scheduler:GetSchedule, scheduler:DeleteSchedule]
+                Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/delivery-lab-*'
+              # Delete only the original access stack's roles/policies. The cleanup
+              # role and GitHub OIDC provider remain free and support retries.
+              - Effect: Allow
+                Action: [iam:GetRole, iam:ListRolePolicies, iam:GetRolePolicy, iam:DeleteRolePolicy, iam:ListAttachedRolePolicies, iam:DetachRolePolicy, iam:DeleteRole]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/delivery-lab-access-*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/delivery-lab-cloudformation'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/delivery-lab-github-*'
+              - Effect: Allow
+                Action: [iam:GetPolicy, iam:GetPolicyVersion, iam:ListPolicyVersions, iam:DeletePolicyVersion, iam:ListEntitiesForPolicy, iam:DeletePolicy]
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/delivery-lab-access-*'
+
+Outputs:
+  FinalCleanupRoleArn:
+    Value: !GetAtt FinalCleanupRole.Arn

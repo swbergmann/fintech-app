@@ -48,7 +48,7 @@ class TransitionTests(unittest.TestCase):
         aws.assert_not_called()
 
     def test_partial_full_and_mismatched_promotion_chain(self):
-        for scope in ('partial', 'full', 'mismatch', 'runtime_failure', 'network_failure'):
+        for scope in ('partial', 'full', 'mismatch', 'runtime_failure'):
             environments = ('dev', 'uat', 'prod') if scope == 'full' else ('dev', 'uat')
             args = argparse.Namespace(release=SHA, dev_run='1', uat_run='2',
                     prod_run='3' if scope == 'full' else None, account=ACCOUNT,
@@ -78,15 +78,11 @@ class TransitionTests(unittest.TestCase):
                     patch.object(transition, 'resolve_images', return_value={'backend': 'digest', 'frontend': 'digest'}), \
                     patch.object(transition, 'verify_previous_environment'), \
                     patch.object(transition, 'check_foundation', side_effect=lambda stack, *a, **k: transition.outputs(stack)), \
-                    patch.object(transition, 'check_runner_network',
-                                 side_effect=ValueError('client address changed') if scope == 'network_failure' else None), \
                     patch.object(transition, 'Deployment', return_value=engine), \
                     patch.object(transition, 'request', side_effect=responses):
-                if scope in ('mismatch', 'runtime_failure', 'network_failure'):
+                if scope in ('mismatch', 'runtime_failure'):
                     with self.assertRaises(ValueError):
                         transition.audit(args)
-                    if scope == 'network_failure':
-                        engine.verify_service.assert_not_called()
                 else:
                     result = transition.audit(args)
                     self.assertEqual(result['all_three_environments_verified'], scope == 'full')

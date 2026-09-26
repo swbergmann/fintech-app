@@ -14,7 +14,7 @@ import tempfile
 import zipfile
 
 from aws_deployment import (Aws, Deployment, PROJECT, check_foundation,
-                            check_runner_network, outputs, resolve_images, validate_release)
+                            outputs, resolve_images, validate_release)
 from lab import read_json, write_json
 
 WORKFLOWS = {'dev': ('deploy-dev.yml', 'workflow_run'),
@@ -196,7 +196,6 @@ def promote(args):
         verify_previous_environment(aws, previous)
         foundation = aws.describe(f'{PROJECT}-{args.environment}')
         values = check_foundation(foundation, aws.account, environment=args.environment)
-        check_runner_network(values['AllowedClientCidr'])
         runtime = resolve_images(aws, data)
         if args.verify_only:
             return {'status': 'verified-only', 'environment': args.environment, 'release': args.release,

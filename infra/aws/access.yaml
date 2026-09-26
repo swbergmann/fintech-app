@@ -20,6 +20,8 @@ Conditions:
 
 Resources:
   GitHubProvider:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Type: AWS::IAM::OIDCProvider
     Condition: CreateProvider
     Properties:

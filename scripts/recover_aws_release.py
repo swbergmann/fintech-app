@@ -13,7 +13,7 @@ import uuid
 import zipfile
 
 from aws_deployment import (Aws, Deployment, ENVIRONMENTS, PROJECT, READY, check_foundation,
-                            check_runner_network, outputs, resolve_images, validate_release)
+                            outputs, resolve_images, validate_release)
 from lab import now, write_json
 from promote_aws_release import GitHub, current_execution, same_release, timestamp
 from smoke import smoke
@@ -212,7 +212,6 @@ def recover(args):
     name = f'{PROJECT}-{args.environment}'
     foundation = aws.describe(name)
     values = check_foundation(foundation, aws.account, environment=args.environment)
-    check_runner_network(values['AllowedClientCidr'])
     app, migration = aws.describe(name + '-app'), aws.describe(name + '-migration')
     owned_child(app, foundation, name + '-app')
     owned_child(migration, foundation, name + '-migration')

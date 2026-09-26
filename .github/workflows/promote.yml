@@ -95,7 +95,7 @@ jobs:
           receipt = json.load(open('.local/aws-promotion-receipt.json'))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write(f"AWS {receipt['environment'].upper()} passed for `{receipt['release']}`.\n\n")
-              summary.write(f"Application: {receipt['url']} (restricted to the runner's public IPv4).\n\n")
+              summary.write(f"Application: {receipt['url']} (public lab URL).\n\n")
               summary.write(f"Cleanup: {receipt['expires_at']} UTC.\n\n")
               summary.write(f"Previous deployment: {receipt['promotion']['previous']['run_id']}.\n\n")
               if receipt['environment'] == 'uat':
