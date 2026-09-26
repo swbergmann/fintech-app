@@ -30,6 +30,8 @@ jobs:
             frontend/src backend/src
       - name: Test AWS image preparation and frontend configuration
         run: python3 -m unittest discover -s tests -p test_aws_images.py -v
+      - name: Test release publication safeguards
+        run: python3 -m unittest discover -s tests -p test_aws_release.py -v
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -77,3 +79,60 @@ jobs:
           path: release.tar.gz
           retention-days: 30
           if-no-files-found: error
+
+  publish:
+    name: Publish AWS release
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: aws-release-${{ github.sha }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Download the tested release
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-${{ github.sha }}
+          path: .download
+      - name: Authenticate for ECR publication
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: release-${{ github.run_id }}
+      - name: Build missing images once, publish and verify digests
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          python3 scripts/publish_aws_release.py \
+            --archive .download/release.tar.gz --output aws-release.json \
+            --account "$AWS_ACCOUNT_ID" --region "$AWS_REGION" \
+            --release "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID"
+      - name: Store AWS release metadata
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: aws-release-${{ github.sha }}
+          path: aws-release.json
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+      - name: Summarize stored images
+        run: |
+          python3 - <<'PY'
+          import json, os
+          release = json.load(open('aws-release.json'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"Release `{release['release']}` is stored in ECR.\n\n")
+              for service, image in release['images'].items():
+                  summary.write(f"- {service}: `{image['uri']}`\n")
+              summary.write('\nDownload **aws-release.json** from this run’s AWS release artifact.\n')
+          PY

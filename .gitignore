@@ -4,6 +4,7 @@ target/
 .local/
 .download/
 release.tar.gz
+aws-release.json
 .env
 .env.*
 !.env.example
