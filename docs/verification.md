@@ -1,6 +1,8 @@
 # Verification record
 
-Prepared on 8 September 2026. These results describe the delivered source; they do not claim a live GitHub or Oracle deployment.
+The original local checks below were prepared on 8 September 2026. They are a
+historical snapshot; the AWS recovery checks recorded later in this document
+include live DEV verification.
 
 | Check | Observed result |
 |---|---|
@@ -36,3 +38,29 @@ The user subsequently reached Flyway and reported ORA-01031 on the identity-colu
 5. Upload to GitHub, configure the runner and repository rules, and repeat using a real pull request.
 
 Record any environment-specific fixes before treating the stack as fully validated. Keep real observations separate from proposed security improvements in the case study.
+
+## AWS deployment recovery — 26 September 2026
+
+- All **114 Python tests passed**, including 19 recovery, migration-policy and
+  diagnostic tests. These exercise rejection of unverified releases, changed
+  migration bundles, failed database tasks, unexpected infrastructure changes,
+  missing confirmation and failed smoke tests.
+- CloudFormation validation passed for all five templates, including the
+  recovery constraints. Actionlint passed for CI, Deploy DEV, Promote release
+  and Recover deployment.
+- Using the local recovery helper against the existing AWS DEV environment,
+  restored verified release `756132d131df2538da1072bcfc2c804c6e2a1636`, then restored
+  `6ad7f28388259d0ff2d35580b2805879ebb42664`. Both passed exact image/task checks and
+  frontend, API and Oracle CRUD smoke tests. An additional fictional customer
+  survived both operations and was removed after verification.
+- [Deploy DEV run 36236838725, attempt 2](https://github.com/swbergmann/fintech-app/actions/runs/36236838725/attempts/2)
+  then passed using the restored release's existing images, refreshing normal
+  promotion evidence after the task-definition revision changed. Its downloaded
+  receipt was checked against GitHub and the current DEV application stack.
+- No environment was provisioned and no cleanup deadline was extended. UAT was
+  not changed, and PROD was not provisioned.
+
+The new recovery workflow itself still needs a GitHub run after merge. The live
+rehearsal tested two previously successful releases with identical migration
+bundles; it did not inject a deployment failure, exercise automatic ECS rollback,
+reverse a database migration or restore an RDS backup.

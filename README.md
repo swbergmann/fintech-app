@@ -4,9 +4,9 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 
 **Start here:** [Local setup](docs/local-setup.md) → [GitHub setup](docs/github-setup.md) → [Case study walkthrough](docs/case-study.md).
 
-**AWS migration — steps 1–6:** [AWS deployment guide](infra/aws/README.md)
+**AWS migration — steps 1–7:** [AWS deployment guide](infra/aws/README.md)
 describes disposable foundations, ECR publication, automatic **AWS DEV** deployment
-and manual **AWS UAT/PROD** promotion.
+and manual **AWS UAT/PROD** promotion, plus controlled application recovery.
 The existing Mac Actions runner controls CloudFormation/ECS and runs smoke tests;
 the frontend/backend run on Fargate, and Oracle runs on RDS. DEV must be explicitly
 provisioned for an eight-hour session, as must each promotion target.
@@ -19,6 +19,7 @@ provisioned for an eight-hour session, as must each promotion target.
 - Main-branch CI publishes the two AWS images to ECR and records immutable digests for later AWS deployment.
 - Automatic AWS DEV deployment after successful main-branch CI and ECR publication.
 - Manual AWS UAT/PROD promotion of the same image digests, requiring verified prior-stage evidence and human UAT acceptance before PROD.
+- Manual recovery to previously verified images, with unchanged migration-bundle checks, recent database task evidence and recovery smoke tests.
 - Three separate Docker Compose projects remain available for local development and the original demonstration.
 - Tests for the app and promotion rules, plus a real Oracle smoke test during every deployment.
 
@@ -53,7 +54,7 @@ flowchart TD
 
 The frontend and Java application are built once for each main-branch release. After all checks pass, CI wraps those outputs in Linux/amd64 images, publishes them to ECR and stores their digests. **Deploy DEV** verifies both artifacts from that CI run, runs separate Oracle bootstrap and Flyway tasks, and applies the ECS service through CloudFormation. It checks the running image digests and exercises frontend, API and Oracle CRUD before recording success. Deployment does not run Docker, npm or Maven. Failed CI, database tasks or smoke tests prevent a passed DEV receipt. **Promote release** verifies a specified prior GitHub deployment run, checks the original CI artifacts, and deploys the same digests to UAT/PROD. PROD additionally requires a successful UAT run and human acceptance confirmation. Each environment must be explicitly provisioned; promotion never extends cleanup deadlines.
 
-CI runs Semgrep immediately after checkout, before application tests or builds, and stops on any reported finding. It then initializes CodeQL before the existing builds and analyzes the code afterward. A separate CodeQL gate blocks release packaging on high/critical findings or missing reports. The [GitHub guide](docs/github-setup.md#semgrep-before-tests-and-builds) explains both policies and how to require the check before merging. AWS deployment and promotion gate tests run in CI. The original local Compose promotion-rule tests remain commented out for the earlier case-study stage.
+CI runs Semgrep immediately after checkout, before application tests or builds, and stops on any reported finding. It then initializes CodeQL before the existing builds and analyzes the code afterward. A separate CodeQL gate blocks release packaging on high/critical findings or missing reports. The [GitHub guide](docs/github-setup.md#semgrep-before-tests-and-builds) explains both policies and how to require the check before merging. AWS deployment, promotion and recovery gate tests run in CI; versioned Oracle migrations must remain append-only. The original local Compose promotion-rule tests remain commented out for the earlier case-study stage.
 
 The default human release decision is GitHub's **Run workflow** action. This works without paid environment-review features. It is not an independent second-person approval. The GitHub guide explains how to add enforced reviewer gates when your repository supports them.
 
@@ -90,6 +91,8 @@ Replace `YOUR_RELEASE_ID` with the printed value. GitHub releases use the full c
 | `scripts/package.py` | Package already-built artifacts and their checksums |
 | `scripts/check_codeql.py` | Block high/critical CodeQL findings before release packaging |
 | `scripts/aws_deployment.py` | Shared AWS deployment engine for DEV, UAT and PROD |
+| `scripts/recover_aws_release.py` | Verify recovery prerequisites and restore only application release parameters |
+| `scripts/aws_diagnostics.py` | Collect bounded failure state without secret values |
 | `scripts/promote_aws_release.py` | Verify GitHub deployment evidence and enforce AWS promotion gates |
 | `scripts/lab.py` | Install, deploy, enforce promotion order, record evidence, stop environments |
 | `scripts/smoke.py` | Verify frontend version, backend version, health, validation, and real database CRUD |
@@ -101,3 +104,5 @@ Generated passwords, installed releases, and deployment receipts stay in `.local
 ## Validation
 
 See [verification results](docs/verification.md) for what has been tested and what still requires a running Docker engine. A passing unit test is not presented as a successful Oracle deployment.
+
+Recovery instructions and the database limitations are in [the AWS recovery guide](infra/aws/README.md#deployment-recovery-step-7).

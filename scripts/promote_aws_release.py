@@ -18,7 +18,8 @@ from aws_deployment import (Aws, Deployment, PROJECT, check_foundation,
 from lab import read_json, write_json
 
 WORKFLOWS = {'dev': ('deploy-dev.yml', 'workflow_run'),
-             'uat': ('promote.yml', 'workflow_dispatch'), 'ci': ('ci.yml', 'push')}
+             'uat': ('promote.yml', 'workflow_dispatch'),
+             'prod': ('promote.yml', 'workflow_dispatch'), 'ci': ('ci.yml', 'push')}
 
 
 def check_request(environment, release, previous_run, accept_uat):
@@ -106,15 +107,18 @@ class GitHub:
                 or receipt.get('source', {}).get('repository') != self.repository
                 or not timestamp(run['run_started_at']) <= timestamp(receipt['completed_at']) <= timestamp(run['updated_at'])):
             raise ValueError('Receipt does not prove the requested release passed the previous environment.')
-        if environment == 'uat':
+        if environment in ('uat', 'prod'):
             execution = receipt.get('execution', {})
             if execution != execution_identity(self.repository, run):
-                raise ValueError('UAT receipt is not evidence produced by this GitHub workflow attempt.')
+                raise ValueError('Receipt is not evidence produced by this GitHub workflow attempt.')
             prior = receipt['promotion']['previous']
-            dev, actual = self.evidence('dev', prior['run_id'], release, directory)
+            previous_env = 'dev' if environment == 'uat' else 'uat'
+            if environment == 'prod' and receipt['promotion'].get('accepted_uat') is not True:
+                raise ValueError('PROD evidence lacks human UAT acceptance.')
+            previous, actual = self.evidence(previous_env, prior['run_id'], release, directory)
             if prior != actual:
-                raise ValueError('DEV evidence changed since UAT; repeat promotion from verified evidence.')
-            same_release(dev, receipt)
+                raise ValueError('Previous evidence changed; repeat promotion from verified evidence.')
+            same_release(previous, receipt)
         return receipt, reference
 
 
@@ -123,18 +127,18 @@ def execution_identity(repository, run):
             'run_attempt': run['run_attempt'], 'head_sha': run['head_sha']}
 
 
-def current_execution(github):
+def current_execution(github, workflow='promote.yml'):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         return {'kind': 'local'}
     run = github.api(f'{github.base}/runs/{os.environ["GITHUB_RUN_ID"]}')
     if (str(run['id']) != os.environ['GITHUB_RUN_ID']
             or run['event'] != 'workflow_dispatch' or run['head_branch'] != 'main'
-            or run['path'] != '.github/workflows/promote.yml'
+            or run['path'] != f'.github/workflows/{workflow}'
             or run['repository']['full_name'] != github.repository
             or run['head_repository']['full_name'] != github.repository
             or run['head_sha'] != os.environ['GITHUB_SHA']
             or str(run['run_attempt']) != os.environ['GITHUB_RUN_ATTEMPT']):
-        raise ValueError('Promotion must execute the selected main-branch workflow revision.')
+        raise ValueError('Execution must use the selected main-branch workflow revision.')
     return execution_identity(github.repository, run)
 
 
