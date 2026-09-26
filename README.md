@@ -4,11 +4,12 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 
 **Start here:** [Local setup](docs/local-setup.md) → [GitHub setup](docs/github-setup.md) → [Case study walkthrough](docs/case-study.md).
 
-**AWS migration — steps 1–5:** [AWS deployment guide](infra/aws/README.md)
-describes disposable foundations, ECR publication and automatic **AWS DEV** deployment.
+**AWS migration — steps 1–6:** [AWS deployment guide](infra/aws/README.md)
+describes disposable foundations, ECR publication, automatic **AWS DEV** deployment
+and manual **AWS UAT/PROD** promotion.
 The existing Mac Actions runner controls CloudFormation/ECS and runs smoke tests;
 the frontend/backend run on Fargate, and Oracle runs on RDS. DEV must be explicitly
-provisioned for an eight-hour session. AWS UAT/PROD promotion is the next step.
+provisioned for an eight-hour session, as must each promotion target.
 
 ## What you get
 
@@ -17,12 +18,12 @@ provisioned for an eight-hour session. AWS UAT/PROD promotion is the next step.
 - A release containing the frontend build, Java JAR, and deployment files; Flyway migrations are inside the JAR.
 - Main-branch CI publishes the two AWS images to ECR and records immutable digests for later AWS deployment.
 - Automatic AWS DEV deployment after successful main-branch CI and ECR publication.
-- Manual local UAT/PROD promotion retained until the AWS promotion workflow is implemented.
+- Manual AWS UAT/PROD promotion of the same image digests, requiring verified prior-stage evidence and human UAT acceptance before PROD.
 - Three separate Docker Compose projects remain available for local development and the original demonstration.
 - Tests for the app and promotion rules, plus a real Oracle smoke test during every deployment.
 
 The local demonstration remains available through `scripts/local-demo.sh` and
-`scripts/lab.py`. GitHub's **Deploy DEV** now targets AWS instead of this table:
+`scripts/lab.py`. GitHub's **Deploy DEV** and **Promote release** workflows target AWS; the table below describes the separate local demo:
 
 | Local environment | Local URL | Human action |
 |---|---|---|
@@ -44,12 +45,15 @@ flowchart TD
   E --> F[AUTO: Oracle bootstrap, Flyway migrations, ECS deployment]
   F --> G[AUTO: verify running image digests and smoke tests]
   G --> H[Store passed AWS DEV deployment evidence]
-  H -. Next implementation step .-> I[Controlled AWS UAT and PROD promotion]
+  H --> I[HUMAN: select release and successful DEV run]
+  I --> J[Verify evidence and deploy the same images to AWS UAT]
+  J --> K[HUMAN: acceptance testing and PROD promotion request]
+  K --> L[Verify UAT evidence and deploy the same images to AWS PROD]
 ```
 
-The frontend and Java application are built once for each main-branch release. After all checks pass, CI wraps those outputs in Linux/amd64 images, publishes them to ECR and stores their digests. **Deploy DEV** verifies both artifacts from that CI run, runs separate Oracle bootstrap and Flyway tasks, and applies the ECS service through CloudFormation. It checks the running image digests and exercises frontend, API and Oracle CRUD before recording success. Deployment does not run Docker, npm or Maven. Failed CI, database tasks or smoke tests prevent a passed DEV receipt. AWS promotion is not implemented yet; the existing local promotion command still requires its own local DEV evidence.
+The frontend and Java application are built once for each main-branch release. After all checks pass, CI wraps those outputs in Linux/amd64 images, publishes them to ECR and stores their digests. **Deploy DEV** verifies both artifacts from that CI run, runs separate Oracle bootstrap and Flyway tasks, and applies the ECS service through CloudFormation. It checks the running image digests and exercises frontend, API and Oracle CRUD before recording success. Deployment does not run Docker, npm or Maven. Failed CI, database tasks or smoke tests prevent a passed DEV receipt. **Promote release** verifies a specified prior GitHub deployment run, checks the original CI artifacts, and deploys the same digests to UAT/PROD. PROD additionally requires a successful UAT run and human acceptance confirmation. Each environment must be explicitly provisioned; promotion never extends cleanup deadlines.
 
-CI runs Semgrep immediately after checkout, before application tests or builds, and stops on any reported finding. It then initializes CodeQL before the existing builds and analyzes the code afterward. A separate CodeQL gate blocks release packaging on high/critical findings or missing reports. The [GitHub guide](docs/github-setup.md#semgrep-before-tests-and-builds) explains both policies and how to require the check before merging. Promotion-rule tests remain commented out in CI for the current case-study stage; security-gate tests run independently.
+CI runs Semgrep immediately after checkout, before application tests or builds, and stops on any reported finding. It then initializes CodeQL before the existing builds and analyzes the code afterward. A separate CodeQL gate blocks release packaging on high/critical findings or missing reports. The [GitHub guide](docs/github-setup.md#semgrep-before-tests-and-builds) explains both policies and how to require the check before merging. AWS deployment and promotion gate tests run in CI. The original local Compose promotion-rule tests remain commented out for the earlier case-study stage.
 
 The default human release decision is GitHub's **Run workflow** action. This works without paid environment-review features. It is not an independent second-person approval. The GitHub guide explains how to add enforced reviewer gates when your repository supports them.
 
@@ -82,9 +86,11 @@ Replace `YOUR_RELEASE_ID` with the printed value. GitHub releases use the full c
 | `backend/src/main/resources/db/migration/` | Versioned Oracle changes; starts with `V1__create_customers.sql` |
 | `.github/workflows/` | CI, automatic DEV deployment, manual promotion |
 | `infra/` | Docker runtime images, proxy, isolated environment definition, database bootstrap |
-| `infra/aws/` | Planned CloudFormation templates, environment profiles and offline validation |
+| `infra/aws/` | CloudFormation templates, environment profiles, provisioning and AWS deployment guide |
 | `scripts/package.py` | Package already-built artifacts and their checksums |
 | `scripts/check_codeql.py` | Block high/critical CodeQL findings before release packaging |
+| `scripts/aws_deployment.py` | Shared AWS deployment engine for DEV, UAT and PROD |
+| `scripts/promote_aws_release.py` | Verify GitHub deployment evidence and enforce AWS promotion gates |
 | `scripts/lab.py` | Install, deploy, enforce promotion order, record evidence, stop environments |
 | `scripts/smoke.py` | Verify frontend version, backend version, health, validation, and real database CRUD |
 | `tests/` | Failure and success cases for the release process |
