@@ -1,53 +1,120 @@
 name: Promote release
-run-name: Promote ${{ inputs.release_id }} to ${{ inputs.environment }}
+run-name: Promote ${{ inputs.release_id }} to AWS ${{ inputs.environment }}
 
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: Target environment
+        description: Target AWS environment
         type: choice
         options: [uat, prod]
         required: true
       release_id:
-        description: Full 40-character commit SHA from the successful DEV run
+        description: Full 40-character commit SHA that passed the previous environment
+        type: string
+        required: true
+      previous_run_id:
+        description: Successful DEV run ID for UAT, or UAT promotion run ID for PROD (from its URL)
         type: string
         required: true
       accept_uat:
-        description: For PROD, I confirm that human user acceptance testing passed
+        description: For PROD, I confirm human acceptance testing passed for this release in UAT
         type: boolean
         default: false
         required: true
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: delivery-lab-local
+  group: delivery-lab-aws
   cancel-in-progress: false
 
 jobs:
   promote:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, delivery-lab]
-    timeout-minutes: 30
-    # Baseline: the authorized user's manual dispatch is the human release decision.
-    # See docs/github-setup.md for adding a separate, enforced deployment reviewer.
+    timeout-minutes: 65
+    environment: aws-${{ inputs.environment }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    # Manual dispatch is the release decision; PROD additionally requires UAT attestation.
+    # Independent reviewers can be added to the GitHub environment without changing this job.
     env:
-      LAB_HOME: ${{ vars.LAB_HOME }}
       RELEASE_ID: ${{ inputs.release_id }}
       TARGET_ENV: ${{ inputs.environment }}
+      PREVIOUS_RUN: ${{ inputs.previous_run_id }}
       ACCEPT_UAT: ${{ inputs.accept_uat }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Check approval and promote existing release
+      - name: Check release request and human acceptance
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from lab import write_json
+          from promote_aws_release import check_request
+          # A failed request must never upload evidence left by an earlier attempt.
+          write_json('.local/aws-promotion-receipt.json', {'status': 'failed',
+                     'environment': os.environ['TARGET_ENV'], 'release': os.environ['RELEASE_ID']})
+          check_request(os.environ['TARGET_ENV'], os.environ['RELEASE_ID'],
+                        os.environ['PREVIOUS_RUN'], os.environ['ACCEPT_UAT'] == 'true')
+          PY
+      - name: Authenticate to the target AWS environment
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_PROMOTION_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: promote-${{ github.run_id }}
+          role-duration-seconds: 7200
+          unset-current-credentials: true
+      - name: Verify previous deployment and promote the unchanged release
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           options=()
           if [[ "$ACCEPT_UAT" == "true" ]]; then options+=(--accept-uat); fi
-          python3 scripts/lab.py deploy --release "$RELEASE_ID" --environment "$TARGET_ENV" "${options[@]}"
+          python3 scripts/promote_aws_release.py \
+            --environment "$TARGET_ENV" --release "$RELEASE_ID" --previous-run-id "$PREVIOUS_RUN" \
+            --repository "$GITHUB_REPOSITORY" --account "$AWS_ACCOUNT_ID" --region "$AWS_REGION" \
+            --require-role --output .local/aws-promotion-receipt.json "${options[@]}"
       - name: Record the deployment summary
-        run: echo "$TARGET_ENV passed for release $RELEASE_ID, requested by $GITHUB_ACTOR." >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          python3 - <<'PY'
+          import json, os
+          receipt = json.load(open('.local/aws-promotion-receipt.json'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"AWS {receipt['environment'].upper()} passed for `{receipt['release']}`.\n\n")
+              summary.write(f"Application: {receipt['url']} (restricted to the runner's public IPv4).\n\n")
+              summary.write(f"Cleanup: {receipt['expires_at']} UTC.\n\n")
+              summary.write(f"Previous deployment: {receipt['promotion']['previous']['run_id']}.\n\n")
+              if receipt['environment'] == 'uat':
+                  summary.write('Perform human acceptance testing before requesting PROD. '
+                                f"Use this UAT run ID: {os.environ['GITHUB_RUN_ID']}.\n")
+          PY
+      - name: Prepare deployment evidence for upload
+        if: always()
+        run: |
+          if [ -f .local/aws-promotion-receipt.json ]; then
+            mkdir -p .local/promotion-evidence
+            cp .local/aws-promotion-receipt.json ".local/promotion-evidence/aws-$TARGET_ENV-receipt.json"
+          fi
+      - name: Store AWS deployment evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: aws-${{ inputs.environment }}-${{ inputs.release_id }}
+          path: .local/promotion-evidence/aws-${{ inputs.environment }}-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true

@@ -1,12 +1,12 @@
-# AWS infrastructure, release storage and DEV deployment: steps 1–5
+# AWS infrastructure and CI/CD delivery: steps 1–6
 
 The lab uses CloudFormation to provision DEV, UAT and PROD in **Ireland
 (`eu-west-1`)**. Step 2 establishes GitHub OIDC access and creates the environment
 foundations. Step 3 prepares the application images and the separate Oracle
 bootstrap task. Step 4 extends CI to publish the two application images to ECR
 and store their digests. Step 5 connects **Deploy DEV** to CloudFormation,
-ECS/Fargate and RDS Oracle. **Promote release** still targets locally installed
-releases until the separate AWS promotion step is implemented.
+ECS/Fargate and RDS Oracle. Step 6 enables manual **AWS UAT/PROD** promotion
+with verified prior-stage evidence and human acceptance before PROD.
 
 **This is a disposable academic lab:** provisioning schedules deletion of selected
 environments and their fictional data **eight hours after the foundations are ready**.
@@ -291,8 +291,8 @@ both ECR images have been verified against the original input manifest.
 
 Any build, push, checksum or image-verification failure fails the publishing job.
 No new success metadata is uploaded after such a failure. The overall CI run must
-succeed before **Deploy DEV** proceeds to AWS. **Promote release** still promotes
-locally installed images at this stage; AWS UAT/PROD promotion is the next step.
+succeed before **Deploy DEV** proceeds to AWS. **Promote release** reuses those published images for AWS UAT and PROD, with
+verified previous-environment evidence and human UAT acceptance before PROD.
 
 ### Publishing access and configuration
 
@@ -441,14 +441,136 @@ This uses the local CLI profile; it does not test GitHub's OIDC exchange and doe
 not upload its local receipt to GitHub. Keep local checks separate from the
 workflow evidence used for later automated promotion.
 
-### Remaining step: AWS UAT and PROD promotion
+## Controlled AWS UAT and PROD promotion (step 6)
 
-`promote.yml` still targets locally installed releases and checks local DEV/UAT
-receipts. AWS DEV evidence cannot satisfy those local checks. The next step must
-adapt promotion to consume the same ECR digests, require successful AWS DEV before
-UAT, require successful UAT plus human acceptance before PROD, and validate the
-source workflow and environment/session identities. Local development and the
-original Compose demonstration remain available through the existing scripts.
+### Select a release and its evidence
+
+**Promote release** (`.github/workflows/promote.yml`) is a manual, main-branch
+workflow. It runs the same Python deployment engine as DEV on the existing Mac
+runner. The target is AWS ECS/Fargate and RDS; Docker Compose remains a local
+option through `scripts/lab.py`, not the GitHub promotion workflow.
+
+| Input | UAT deployment | PROD deployment |
+|---|---|---|
+| Branch | `main` | `main` |
+| `environment` | `uat` | `prod` |
+| `release_id` | Full commit SHA from a successful AWS DEV run | Same SHA that passed AWS UAT |
+| `previous_run_id` | Numeric **Deploy DEV** run ID | Numeric **Promote release** run ID that deployed UAT |
+| `accept_uat` | Leave unchecked; testing follows deployment | Check only after human acceptance testing passed for this SHA in UAT |
+
+The run ID is the number after `/actions/runs/` in the previous run's URL.
+It is not the CI run ID or the job ID. Requiring a specific run avoids silently
+choosing another release or unrelated deployment. The summary of a successful
+UAT run supplies its run ID for the subsequent PROD request.
+
+Manual dispatch is the release owner's decision; the checkbox records human
+attestation. It does not perform acceptance testing or require a second approver.
+Optional independent reviewers can be configured on `aws-uat`/`aws-prod` where
+supported, without adding a second workflow that bypasses these gates.
+
+### Environment access and prerequisites
+
+Apply `access.yaml` using the existing local bootstrap procedure. It adds separate
+`delivery-lab-github-uat` and `delivery-lab-github-prod` roles. Create the GitHub
+environments **aws-uat** and **aws-prod**, each with a custom deployment branch
+policy allowing **main** only. Set **AWS_PROMOTION_ROLE_ARN** in each environment
+to its corresponding `UatRoleArn` or `ProdRoleArn` stack output. Continue using
+the repository's `AWS_ACCOUNT_ID` and `AWS_REGION` variables.
+
+Each role trusts only its own GitHub environment OIDC subject. It can deploy its
+own application/migration stacks, run its own database tasks, verify ECR images,
+and read the immediately preceding environment's foundation and application
+stack. It cannot directly read database passwords or push images. Templates
+still execute through the shared CloudFormation service role; trusted review of
+infrastructure changes on `main` remains necessary.
+
+Before promotion, explicitly provision the target through **AWS infrastructure**,
+selecting `provision` and `uat` or `prod`. Keep the previous environment available
+until promotion starts, with the verified release still deployed. Both must belong
+to the expected account and session. The target needs at least 60 minutes before
+cleanup; the previous environment needs at least 15 minutes. Each target keeps
+its independently scheduled eight-hour cleanup. Promotion never provisions
+foundations or extends their expiry. Provision only the environments needed for
+that session; retain the approved small lab sizes, including simulated PROD.
+
+DEV deployment, promotion and infrastructure operations share the
+`delivery-lab-aws` concurrency group. Avoid simultaneous local deployment commands,
+which are outside GitHub's concurrency control. The Mac must remain online and its
+public IPv4 must match the target's `AllowedClientCidr`.
+
+### Verification and deployment sequence
+
+`scripts/promote_aws_release.py` enforces the following gates:
+
+1. Validate the full SHA and prior run ID. Reject PROD without human UAT acceptance
+   before any AWS operation; reject premature acceptance on a UAT deployment.
+2. Query GitHub for the explicitly selected successful main-branch workflow run,
+   verifying workflow identity, event, repository and branch. DEV evidence must
+   come from `deploy-dev.yml`; UAT evidence must come from `promote.yml`.
+3. Download the matching, unexpired deployment artifact from that run. Verify its
+   ZIP digest against GitHub's metadata, require a passed receipt for the same
+   release/environment, and reject evidence predating a rerun. For PROD, verify
+   the UAT workflow attempt and its recorded chain back to unchanged DEV evidence.
+   A local receipt cannot substitute for a successful GitHub UAT run.
+4. Resolve the original successful main CI run from that receipt. Download both
+   `release-<SHA>` and `aws-release-<SHA>` from that exact run, check the GitHub ZIP
+   digests, archive and manifest checksums, and require the same image metadata
+   as the previous deployment. Missing/expired artifacts stop promotion; they are
+   retained for 30 days, independently of AWS environment lifetimes.
+5. Verify temporary credentials for the selected environment role. Confirm the
+   previous foundation has not been recreated and its application stack still
+   identifies the verified release, task definition and image digests. Require a
+   ready target foundation, correct runner IPv4 and matching ECR digests.
+6. Use the shared `scripts/aws_deployment.py` engine to apply the **archived**
+   migration/application templates, bootstrap the target's Oracle APP schema,
+   run Flyway, deploy the same frontend/backend digests, verify the healthy ECS
+   task and run HTTP/API/Oracle smoke tests. No npm/Maven build, Docker build,
+   ECR image publication or database-data copying occurs during promotion.
+7. Upload `aws-uat-<SHA>` or `aws-prod-<SHA>`, containing
+   `aws-uat-receipt.json` or `aws-prod-receipt.json`. A successful receipt records
+   the GitHub execution identity, previous run/artifact identity, exact release
+   and digests, requester, UAT attestation, target session, task IDs, URL and expiry.
+   Any failure prevents a passed receipt and blocks subsequent promotion.
+
+The release archive supplies tested application templates, while the selected
+main workflow revision supplies the deployment controller. An older release can
+therefore be promoted without rebuilding it. If DEV/UAT has since been replaced
+by another release or recreated, deploy the intended release there again before
+promoting; repeat human testing if the accepted UAT deployment changed.
+
+Smoke tests cover health, release/environment labels, validation and Oracle CRUD.
+After UAT deployment, perform the [human acceptance checklist](../../docs/case-study.md#human-uat-checklist)
+and record the tester, SHA, date, results and defects. Only then request PROD.
+ECS service rollback and migration limitations are the same as DEV: a failed
+smoke test blocks evidence but does not automatically undo application changes,
+and database migrations are never automatically reversed.
+
+### Local verification and testing
+
+The same helper can perform a read-only preflight once both environments exist:
+
+```bash
+python3 scripts/promote_aws_release.py --profile default --verify-only \
+  --environment uat --release FULL_COMMIT_SHA --previous-run-id DEV_RUN_ID \
+  --repository swbergmann/fintech-app --account 637423555881 --region eu-west-1 \
+  --output .local/aws-uat-preflight.json
+```
+
+Without `--verify-only`, this performs an actual deployment. Local integration
+receipts carry `execution.kind: local`; they are not uploaded automatically and
+cannot satisfy PROD's GitHub UAT evidence gate. End-to-end GitHub promotion/OIDC
+must be demonstrated after this workflow is merged to `main`. Do not claim that
+a locally tested helper proves that the new GitHub workflow has run successfully.
+
+CI executes both AWS deployment and promotion gate tests. They cover failed or
+untrusted workflow evidence, stale/altered artifacts, wrong digests, changed
+sessions/releases, missing acceptance, wrong AWS credentials, deployment failures,
+and use of identical digests in UAT/PROD. The original local Compose promotion
+rule test remains commented out at the earlier case-study author's request.
+
+Official references: [GitHub workflow runs](https://docs.github.com/en/rest/actions/workflow-runs),
+[GitHub artifact metadata and downloads](https://docs.github.com/en/rest/actions/artifacts),
+[GitHub environment rules](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
 
 ## Access and provisioning procedure
 

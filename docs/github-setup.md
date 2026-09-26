@@ -1,6 +1,6 @@
 # GitHub setup
 
-**Migration status:** automatic Deploy DEV now targets AWS. This guide retains the original local demonstration; see [the AWS guide](../infra/aws/README.md#automatic-aws-dev-deployment-step-5) for current deployment setup. AWS UAT/PROD promotion is the next implementation step.
+**Migration status:** Deploy DEV and Promote release now target AWS. This guide retains the original local demonstration and acceptance checklist; use [the AWS guide](../infra/aws/README.md#controlled-aws-uat-and-prod-promotion-step-6) for current workflow inputs, evidence gates and environment setup.
 
 This project is ready to push; no repository or account connection has been created for you. You can test locally before configuring GitHub.
 

@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import deploy_aws_dev as deploy
+import aws_deployment as deploy
 import lab
 
 ACCOUNT = '123456789012'
@@ -111,7 +111,7 @@ class DeploymentGateTests(unittest.TestCase):
         self.aws.describe.return_value = foundation()
         self.data = {'release': SHA, 'images': {'backend': {'digest': DIGEST}, 'frontend': {'digest': DIGEST}},
                      'source': {}, 'artifact': {}}
-        self.deployment = deploy.DevDeployment(self.aws, foundation(), Path('/unused'), self.data)
+        self.deployment = deploy.Deployment(self.aws, foundation(), Path('/unused'), self.data)
 
     def test_expired_missing_and_unowned_foundations_are_rejected(self):
         with self.assertRaises(ValueError):
@@ -189,7 +189,7 @@ class DeploymentGateTests(unittest.TestCase):
     def test_foreign_session_child_stack_is_never_updated(self):
         self.aws.describe.side_effect = [foundation(), {'Tags': [{'Key': 'ParentStackId', 'Value': 'another-session'}]}]
         with patch.object(deploy.subprocess, 'run') as run:
-            with self.assertRaisesRegex(ValueError, 'another DEV session'):
+            with self.assertRaisesRegex(ValueError, 'another environment session'):
                 self.deployment.stack('-app', 'application.yaml', {})
             run.assert_not_called()
 
