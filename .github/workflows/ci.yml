@@ -41,6 +41,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_aws_deployment.py' -v
           python3 -m unittest discover -s tests -p 'test_aws_promotion.py' -v
           python3 -m unittest discover -s tests -p 'test_aws_recovery.py' -v
+          python3 -m unittest discover -s tests -p 'test_aws_transition.py' -v
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
