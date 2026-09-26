@@ -4,9 +4,10 @@ A deliberately small **React + Java + Oracle** app for learning Continuous Integ
 
 **Start here:** [Local setup](docs/local-setup.md) → [GitHub setup](docs/github-setup.md) → [Case study walkthrough](docs/case-study.md).
 
-**AWS migration — steps 1–3:** [Infrastructure and application preparation](infra/aws/README.md)
+**AWS migration — steps 1–4:** [Infrastructure, application and release preparation](infra/aws/README.md)
 provide isolated AWS foundations with eight-hour cleanup, configurable frontend routing,
-an Oracle bootstrap task and Linux/x86-64 image preparation. The existing deployment
+an Oracle bootstrap task and Linux/x86-64 images published to ECR. CI stores their
+repository digests in an `aws-release.json` artifact. The existing deployment
 workflows still target the local lab; connecting AWS deployments is the next step.
 
 ## What you get
@@ -14,6 +15,7 @@ workflows still target the local lab; connecting AWS deployments is the next ste
 - One repository for React, a Java 21 / Spring Boot backend, and versioned Oracle SQL migrations.
 - GitHub Actions build, test, and Semgrep/CodeQL security checks for pull requests and merges to `main`.
 - A release containing the frontend build, Java JAR, and deployment files; Flyway migrations are inside the JAR.
+- Main-branch CI publishes the two AWS images to ECR and records immutable digests for later AWS deployment.
 - Automatic DEV deployment after a successful main-branch build.
 - Manual UAT and PROD promotion workflows with checks that the same release passed the previous environment.
 - Three separate Docker Compose projects, Oracle containers, database volumes, application containers, and credentials.
@@ -34,7 +36,8 @@ flowchart TD
   A([HUMAN: write code and SQL, push branch, open pull request]) --> B[AUTO: Semgrep, React and Java tests and builds, CodeQL security gate on GitHub]
   B --> C([HUMAN: review; request changes or approve and merge])
   C --> D[AUTO: verify main and package one release on GitHub]
-  D --> E[AUTO: local runner builds runtime images once]
+  D --> P[AUTO: publish AWS images to ECR and store release metadata]
+  P --> E[AUTO: local runner builds local runtime images once]
   E --> F[AUTO: DEV migrations, deployment and smoke tests]
   F --> G([HUMAN: request UAT promotion])
   G --> H[AUTO: UAT migrations, same images and smoke tests]
@@ -42,7 +45,7 @@ flowchart TD
   I --> J[AUTO: PROD migrations, same images and smoke tests]
 ```
 
-The frontend and Java application are built once for each main-branch release. The local runner wraps those existing outputs in Docker runtime images once, during installation. Promotion reuses the recorded image IDs; it does not rerun npm, Maven, or Docker builds. Each Oracle instance receives the same pending Flyway migrations. Customer data is never copied between environments.
+The frontend and Java application are built once for each main-branch release. After all checks pass, a separate CI job downloads that release, wraps the outputs in Linux/amd64 images, pushes them to ECR and stores their repository digests. A failed publication makes CI fail and prevents automatic local DEV deployment. During this migration stage, the local runner still creates its own local images from the same packaged outputs; local promotion reuses those recorded image IDs. Future AWS deployments will reuse the ECR digests. Neither promotion path should rebuild the application. Each Oracle instance receives the same pending Flyway migrations. Customer data is never copied between environments.
 
 CI runs Semgrep immediately after checkout, before application tests or builds, and stops on any reported finding. It then initializes CodeQL before the existing builds and analyzes the code afterward. A separate CodeQL gate blocks release packaging on high/critical findings or missing reports. The [GitHub guide](docs/github-setup.md#semgrep-before-tests-and-builds) explains both policies and how to require the check before merging. Promotion-rule tests remain commented out in CI for the current case-study stage; security-gate tests run independently.
 

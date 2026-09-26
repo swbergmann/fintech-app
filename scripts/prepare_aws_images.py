@@ -12,11 +12,21 @@ ROOT = Path(__file__).resolve().parents[1]
 PLATFORM = 'linux/amd64'
 
 
-def inspect(tag):
-    image = json.loads(subprocess.check_output(['docker', 'image', 'inspect', tag], text=True))[0]
+def inspect(tag, docker=('docker',)):
+    image = json.loads(subprocess.check_output([*docker, 'image', 'inspect', tag], text=True))[0]
     if (image['Os'], image['Architecture']) != ('linux', 'amd64'):
         raise ValueError(f'{tag} is not Linux/amd64 as required by the ECS task definitions.')
     return image['Id']
+
+
+def build_image(directory, service, release, manifest_digest, tag, docker=('docker',)):
+    """Wrap tested outputs; the Dockerfiles do not compile application source."""
+    subprocess.run([*docker, 'build', '--platform', PLATFORM,
+                    '--label', f'org.opencontainers.image.revision={release}',
+                    '--label', f'com.delivery-lab.manifest-sha256={manifest_digest}',
+                    '-f', str(directory / f'infra/{service}.Dockerfile'),
+                    '-t', tag, str(directory)], check=True)
+    return inspect(tag, docker)
 
 
 def prepare(archive, home):
@@ -42,12 +52,7 @@ def prepare(archive, home):
             return receipt
         images = {}
         for service, tag in tags.items():
-            subprocess.run(['docker', 'build', '--platform', PLATFORM,
-                            '--label', f'org.opencontainers.image.revision={release}',
-                            '--label', f'com.delivery-lab.manifest-sha256={digest}',
-                            '-f', str(directory / f'infra/{service}.Dockerfile'),
-                            '-t', tag, str(directory)], check=True)
-            images[service] = inspect(tag)
+            images[service] = build_image(directory, service, release, digest, tag)
         receipt = {'release': release, 'manifest_sha256': digest, 'platform': PLATFORM,
                    'tags': tags, 'images': images, 'prepared_at': now()}
         write_json(receipt_path, receipt)

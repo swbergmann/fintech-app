@@ -1,11 +1,12 @@
-# AWS infrastructure and application preparation: steps 1–3
+# AWS infrastructure, application and release preparation: steps 1–4
 
 The lab uses CloudFormation to provision DEV, UAT and PROD in **Ireland
 (`eu-west-1`)**. Step 2 establishes GitHub OIDC access and creates the environment
 foundations. Step 3 prepares the application images and the separate Oracle
-bootstrap task. Image publication and execution of AWS deployments remain
-subsequent steps. The existing local CI/CD workflows
-continue to work independently.
+bootstrap task. Step 4 extends CI to publish the two application images to ECR
+and store their digests. Execution of AWS deployments remains a subsequent step.
+The existing deployment workflows still target the local lab, with successful
+ECR publication now included in the CI result required for automatic DEV.
 
 **This is a disposable academic lab:** provisioning schedules deletion of all three
 environments and their fictional data **eight hours after the foundations are ready**.
@@ -16,7 +17,7 @@ process does not leave successfully created environments without a deadline.
 
 | Template | Intended stack names | Resources and responsibility |
 |---|---|---|
-| `access.yaml` | `delivery-lab-access` | GitHub OIDC provider, infrastructure role, CloudFormation execution role, runtime/bootstrap permissions boundaries and scheduled-cleanup Lambda. |
+| `access.yaml` | `delivery-lab-access` | GitHub OIDC provider, separate infrastructure and release publishing roles, CloudFormation execution role, runtime/bootstrap permissions boundaries and scheduled-cleanup Lambda. |
 | `shared.yaml` | `delivery-lab-shared` | Two private ECR repositories, shared across DEV, UAT and PROD. Immutable image tags; repositories retained on deletion. |
 | `environment.yaml` | `delivery-lab-dev`, `delivery-lab-uat`, `delivery-lab-prod` | A separate VPC, subnets, security groups, RDS Oracle instance, secrets, ECS cluster, load balancer, logs, task IAM roles and an expiry schedule per environment. |
 | `migration.yaml` | `delivery-lab-dev-migration`, etc. | Separate Fargate bootstrap and Flyway task definitions using the same backend image. The bootstrap alone can receive the RDS administrator secret. Registering these definitions does not execute them. |
@@ -229,18 +230,126 @@ Oracle Free database; the application bootstrap itself uses only that user.
 Passing this test does **not** prove compatibility with RDS Oracle 19c. That
 integration check is required when the first AWS deployment is connected.
 
+## Release packaging and storage (step 4)
+
+### CI sequence and artifacts
+
+Pull requests run the existing application/security checks and the new publication
+safeguard tests. They do not package releases, request the publishing role or push
+images. On a push to `main`, the **Build and test** job packages its tested React
+output, Java JAR (including migrations) and deployment files into `release.tar.gz`,
+then uploads the existing `release-<commit SHA>` artifact.
+
+The new **Publish AWS release** job depends on that entire job succeeding. It:
+
+1. Downloads the same run's `release-<commit SHA>` artifact.
+2. Authenticates with GitHub OIDC and the dedicated ECR publishing role.
+3. Verifies the archive checksums and that its release matches the full commit SHA.
+4. Uses the archived Dockerfiles to wrap the existing outputs in Linux/amd64
+   frontend/backend images. There is no second npm or Maven build.
+5. Pushes each image to its private ECR repository with the commit SHA as its tag.
+6. Resolves the **ECR manifest digest**, pulls by that digest and checks the image's
+   architecture, source/manifest labels and local image ID.
+7. Stores `aws-release.json` in a separate `aws-release-<commit SHA>` GitHub artifact.
+
+The JSON contains the commit SHA, source CI run, account/region, archive and
+manifest SHA-256 checksums, and both image repository URIs/digests. Future AWS
+deployment and promotion workflows should download both artifacts from the same
+successful CI run, verify the archive against this metadata, and supply the
+recorded `repository@sha256:...` image references to ECS. The application templates
+take `ReleaseId`, `FrontendImageDigest` and `BackendImageDigest`; repository names
+come from the shared stack. **A Docker image ID is not the ECR manifest digest.**
+
+In GitHub, open **Actions → CI → the successful main-branch run → Artifacts** to
+download the two artifacts. The job summary also lists the image references.
+The actual image layers are in **Amazon ECR → Private repositories →
+delivery-lab/frontend or delivery-lab/backend → Images**, in Ireland. They are
+not stored inside the GitHub metadata artifact.
+
+Both GitHub artifacts are retained for 30 days. ECR images have no automatic
+expiry because they may still be needed for promotion or rollback; storage
+charges continue after environment cleanup. Preserve the matching artifacts
+before their retention expires if an older release must remain deployable.
+The ECR scan-on-push setting is informational here; this step does not introduce
+a new vulnerability gate based on its results.
+
+### Retry and failure behaviour
+
+ECR tags are immutable. Before building anything, the publisher verifies any
+images already stored for this commit against the input release manifest. A
+retry reuses those images, builds only missing ones, and never overwrites a tag.
+This recovers a partial push without rebuilding an already published image.
+Publication jobs for the same commit are serialized in GitHub Actions.
+
+After a publishing failure, use **Re-run failed jobs** while the original release
+artifact still exists. Re-running all jobs may produce different Maven build
+bytes for the same source commit or encounter an existing artifact name; the
+publisher deliberately refuses to pair changed archive contents with an existing
+image. Use a new commit for a new build instead of deleting or overwriting tags.
+The metadata upload can replace its previous artifact on a retry, but only after
+both ECR images have been verified against the original input manifest.
+
+Any build, push, checksum or image-verification failure fails the publishing job.
+No new success metadata is uploaded after such a failure. The overall CI run must
+succeed before the existing **Deploy DEV** workflow proceeds. **Promote release**
+still promotes locally installed images at this stage; AWS deployment/promotion
+will be connected in the next step.
+
+### Publishing access and configuration
+
+Apply the updated `access.yaml` using the authenticated local administrator, as
+shown below in **Access and provisioning procedure**. This adds
+`delivery-lab-github-release`; the existing shared ECR repositories can be reused
+without creating any DEV/UAT/PROD foundations. Set these **repository Actions
+variables**, distinct from the existing `aws-infrastructure` environment variables:
+
+| Variable | Value for this lab |
+|---|---|
+| `AWS_ACCOUNT_ID` | `637423555881` |
+| `AWS_REGION` | `eu-west-1` |
+| `AWS_RELEASE_ROLE_ARN` | `ReleaseRoleArn` from the access stack |
+
+The publisher trusts the exact immutable repository subject prefix followed by
+`:ref:refs/heads/main`. It does not use a GitHub environment, because that would
+change its OIDC subject. PR and feature-branch subjects do not match. The job alone
+gets `id-token: write`; **Build and test** does not get AWS publishing credentials.
+The role can authenticate to ECR and push/read only the two named repositories.
+It cannot provision resources, deploy ECS services, read database secrets, delete
+images or change tag immutability. Restrict who can merge workflow changes into
+`main`; the role's trust boundary is the repository's main branch.
+
+Docker authentication uses a temporary configuration directory removed on exit.
+No AWS access keys, ECR login tokens or database passwords enter the release
+archive, metadata or committed configuration.
+
+For a controlled local publication check, download a successful main CI artifact
+and use its actual SHA and run ID with the authenticated AWS CLI profile:
+
+```bash
+AWS_PROFILE=default python3 scripts/publish_aws_release.py \
+  --archive .download/release.tar.gz --output .local/aws-release.json \
+  --account 637423555881 --region eu-west-1 \
+  --release FULL_COMMIT_SHA --repository swbergmann/fintech-app --run-id CI_RUN_ID
+```
+
+This requires a local Docker daemon on macOS/Linux, AWS CLI v2 and Python.
+The CI job uses the tools already installed on `ubuntu-24.04`. Local test IDs
+(`local-...`) are rejected. This command stores metadata locally; only the CI
+upload step makes that metadata appear in GitHub Actions.
+
 ## Remaining implementation before the first AWS application deployment
 
-1. **Apply the updated templates:** use the local authenticated administrator to
-   update `access.yaml` with the new bootstrap boundary, and update the environment
+1. **Provision current foundations when ready:** the access template now includes
+   the bootstrap boundary and publisher role. Create/update the environment
    foundations to export `DatabaseAdminSecretArn` and generate a 30-character APP
    password. Changing the secret does not change an existing database password:
    if an APP account already exists, reconcile its credentials deliberately before
    applying a secret change. Bootstrap will reject a mismatch. These code changes do not
    update existing AWS stacks automatically. If the eight-hour environments have
    expired, recreate them only when ready for AWS testing, within the total budget.
-2. **Publish images:** push the two prepared images to ECR once and record each
-   repository digest and the source commit SHA. Reuse them for all environments.
+2. **Select a published release:** download its archive and AWS metadata from a
+   successful CI run and validate their checksums and source SHA. Reuse the recorded
+   repository digests for all environments.
 3. **Run database preparation:** register `migration.yaml` with those values,
    then run `BootstrapTaskDefinitionArn` in the environment's task subnets/security
    group with public IP enabled. Wait for the `bootstrap` container to exit zero.
@@ -368,6 +477,10 @@ successful AWS deployment.
 - [ECS deployment behaviour and rollback](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html)
 
 - [GitHub OIDC authentication with AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
+- [ECR permissions for image publication](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-push-iam.html)
+- [ECR immutable image tags](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html)
+- [ECR image lookup and manifest digests](https://docs.aws.amazon.com/cli/latest/reference/ecr/batch-get-image.html)
+- [GitHub artifact storage and retention](https://github.com/actions/upload-artifact)
 - [CloudFormation service-role behaviour and permissions](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-iam-servicerole.html)
 - [EventBridge Scheduler CloudFormation resource](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-scheduler-schedule.html)
 - [RDS Oracle pricing](https://aws.amazon.com/rds/oracle/pricing/)

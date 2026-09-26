@@ -307,6 +307,48 @@ Resources:
                   StringEquals:
                     iam:PassedToService: cloudformation.amazonaws.com
 
+  GitHubReleaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-github-release'
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateProvider, !Ref GitHubProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub '${GitHubSubjectPrefix}:ref:refs/heads/main'
+      Policies:
+        - PolicyName: publish-and-verify-lab-images
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action:
+                  - ecr:DescribeRepositories
+                  - ecr:DescribeImages
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}/frontend'
+                  - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}/backend'
+
   CleanupRole:
     Type: AWS::IAM::Role
     Properties:
@@ -436,6 +478,8 @@ Resources:
                 Resource: !GetAtt CleanupFunction.Arn
 
 Outputs:
+  ReleaseRoleArn:
+    Value: !GetAtt GitHubReleaseRole.Arn
   BootstrapBoundaryArn:
     Value: !Ref BootstrapBoundary
     Export:
