@@ -95,7 +95,7 @@ Resources:
             - ContainerPort: 80
               Protocol: tcp
           # ECS awsvpc containers in one task share localhost, not Compose DNS.
-          # Step 3 must teach the frontend image to render this Nginx setting.
+          # The same image renders its upstream from this setting at startup.
           Environment:
             - Name: BACKEND_UPSTREAM
               Value: 127.0.0.1:8080

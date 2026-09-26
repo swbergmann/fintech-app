@@ -1,7 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Register a release-specific migration task without updating the running application.
+Description: Register separate Oracle bootstrap and release migration tasks without updating the running application.
 
 Parameters:
+  ProjectName:
+    Type: String
+    Default: delivery-lab
+    AllowedPattern: '[a-z][a-z0-9-]{1,24}'
+  AccessStackName:
+    Type: String
+    Default: delivery-lab-access
   EnvironmentStackName:
     Type: String
   SharedStackName:
@@ -15,6 +22,101 @@ Parameters:
     AllowedPattern: 'sha256:[a-f0-9]{64}'
 
 Resources:
+  BootstrapExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: !Sub '/${ProjectName}/bootstrap/'
+      PermissionsBoundary:
+        Fn::ImportValue: !Sub '${AccessStackName}-BootstrapBoundaryArn'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        - PolicyName: bootstrap-this-environment-only
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:GetDownloadUrlForLayer, ecr:BatchGetImage]
+                Resource:
+                  Fn::ImportValue: !Sub '${SharedStackName}-BackendRepositoryArn'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub
+                  - 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroup}:*'
+                  - LogGroup:
+                      Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationLogGroup'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - Fn::ImportValue: !Sub '${EnvironmentStackName}-DatabaseAdminSecretArn'
+                  - Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationDatabaseSecretArn'
+  BootstrapTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-bootstrap'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt BootstrapExecutionRole.Arn
+      TaskRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationTaskRoleArn'
+      ContainerDefinitions:
+        - Name: bootstrap
+          Image: !Sub
+            - '${RepositoryUri}@${BackendImageDigest}'
+            - RepositoryUri:
+                Fn::ImportValue: !Sub '${SharedStackName}-BackendRepositoryUri'
+          Essential: true
+          Command: ['--bootstrap-rds']
+          Environment:
+            - Name: DB_URL
+              Value:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-DatabaseUrl'
+          Secrets:
+            - Name: DB_ADMIN_USERNAME
+              ValueFrom: !Sub
+                - '${SecretArn}:username::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${EnvironmentStackName}-DatabaseAdminSecretArn'
+            - Name: DB_ADMIN_PASSWORD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${EnvironmentStackName}-DatabaseAdminSecretArn'
+            - Name: DB_USERNAME
+              ValueFrom: !Sub
+                - '${SecretArn}:username::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationDatabaseSecretArn'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - SecretArn:
+                    Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationDatabaseSecretArn'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub '${EnvironmentStackName}-ApplicationLogGroup'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: bootstrap
   MigrationTask:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -72,6 +174,9 @@ Resources:
               awslogs-stream-prefix: migrate
 
 Outputs:
+  BootstrapTaskDefinitionArn:
+    Description: Run once per environment before Flyway; require bootstrap container exit code zero.
+    Value: !Ref BootstrapTask
   MigrationTaskDefinitionArn:
     Description: The future CD workflow must run this task and check exit code zero before updating application.yaml.
     Value: !Ref MigrationTask
