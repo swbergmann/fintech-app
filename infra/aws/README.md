@@ -1,14 +1,14 @@
-# AWS infrastructure, application and release preparation: steps 1–4
+# AWS infrastructure, release storage and DEV deployment: steps 1–5
 
 The lab uses CloudFormation to provision DEV, UAT and PROD in **Ireland
 (`eu-west-1`)**. Step 2 establishes GitHub OIDC access and creates the environment
 foundations. Step 3 prepares the application images and the separate Oracle
 bootstrap task. Step 4 extends CI to publish the two application images to ECR
-and store their digests. Execution of AWS deployments remains a subsequent step.
-The existing deployment workflows still target the local lab, with successful
-ECR publication now included in the CI result required for automatic DEV.
+and store their digests. Step 5 connects **Deploy DEV** to CloudFormation,
+ECS/Fargate and RDS Oracle. **Promote release** still targets locally installed
+releases until the separate AWS promotion step is implemented.
 
-**This is a disposable academic lab:** provisioning schedules deletion of all three
+**This is a disposable academic lab:** provisioning schedules deletion of selected
 environments and their fictional data **eight hours after the foundations are ready**.
 There is also an initial expiry during creation, so interrupting the provisioning
 process does not leave successfully created environments without a deadline.
@@ -17,7 +17,7 @@ process does not leave successfully created environments without a deadline.
 
 | Template | Intended stack names | Resources and responsibility |
 |---|---|---|
-| `access.yaml` | `delivery-lab-access` | GitHub OIDC provider, separate infrastructure and release publishing roles, CloudFormation execution role, runtime/bootstrap permissions boundaries and scheduled-cleanup Lambda. |
+| `access.yaml` | `delivery-lab-access` | GitHub OIDC provider, separate infrastructure, release publishing and DEV deployment roles, CloudFormation execution role, runtime/bootstrap permissions boundaries and scheduled-cleanup Lambda. |
 | `shared.yaml` | `delivery-lab-shared` | Two private ECR repositories, shared across DEV, UAT and PROD. Immutable image tags; repositories retained on deletion. |
 | `environment.yaml` | `delivery-lab-dev`, `delivery-lab-uat`, `delivery-lab-prod` | A separate VPC, subnets, security groups, RDS Oracle instance, secrets, ECS cluster, load balancer, logs, task IAM roles and an expiry schedule per environment. |
 | `migration.yaml` | `delivery-lab-dev-migration`, etc. | Separate Fargate bootstrap and Flyway task definitions using the same backend image. The bootstrap alone can receive the RDS administrator secret. Registering these definitions does not execute them. |
@@ -49,7 +49,7 @@ flowchart LR
 There are **two long-running application containers per task**. The frontend and
 backend share a task network interface and communicate over localhost. RDS hosts
 Oracle separately; it is not an ECS container. The migration task exists only
-while a later workflow explicitly runs it. Local development continues to use
+while the deployment workflow explicitly runs it. Local development continues to use
 the three-container Docker Compose setup.
 
 ## Isolation and operational choices
@@ -65,9 +65,9 @@ the three-container Docker Compose setup.
   security group. RDS storage is encrypted and backups are enabled.
 - `AllowedClientCidr` is required and has no open-internet default. Prefer the
   operator's public IPv4 address with `/32`. The application has no login, so this
-  restriction matters even for a fictional-data lab. Future smoke tests must run
-  within AWS with narrowly scoped access, or explicitly allow their runner's
-  source; arbitrary GitHub-hosted runners will not pass this restriction.
+  restriction matters even for a fictional-data lab. Deploy DEV retains the existing
+  Mac runner, whose public IPv4 must match this restriction; arbitrary GitHub-hosted
+  runners will not pass it. A preflight check rejects a changed runner IP before deployment.
 - An optional regional ACM certificate enables HTTPS and redirects HTTP. Without
   it, access is restricted HTTP for this academic lab. A certificate also requires
   a matching domain and DNS record, which are not provisioned here. This is not a
@@ -228,7 +228,7 @@ It also checks SPA fallback and rejection of invalid configuration. The fixture
 uses SYSDBA solely to create a limited LABADMIN test user on a disposable local
 Oracle Free database; the application bootstrap itself uses only that user.
 Passing this test does **not** prove compatibility with RDS Oracle 19c. That
-integration check is required when the first AWS deployment is connected.
+integration check is performed by the step 5 deployment helper against RDS Oracle 19c.
 
 ## Release packaging and storage (step 4)
 
@@ -291,9 +291,8 @@ both ECR images have been verified against the original input manifest.
 
 Any build, push, checksum or image-verification failure fails the publishing job.
 No new success metadata is uploaded after such a failure. The overall CI run must
-succeed before the existing **Deploy DEV** workflow proceeds. **Promote release**
-still promotes locally installed images at this stage; AWS deployment/promotion
-will be connected in the next step.
+succeed before **Deploy DEV** proceeds to AWS. **Promote release** still promotes
+locally installed images at this stage; AWS UAT/PROD promotion is the next step.
 
 ### Publishing access and configuration
 
@@ -337,42 +336,119 @@ The CI job uses the tools already installed on `ubuntu-24.04`. Local test IDs
 (`local-...`) are rejected. This command stores metadata locally; only the CI
 upload step makes that metadata appear in GitHub Actions.
 
-## Remaining implementation before the first AWS application deployment
+## Automatic AWS DEV deployment (step 5)
 
-1. **Provision current foundations when ready:** the access template now includes
-   the bootstrap boundary and publisher role. Create/update the environment
-   foundations to export `DatabaseAdminSecretArn` and generate a 30-character APP
-   password. Changing the secret does not change an existing database password:
-   if an APP account already exists, reconcile its credentials deliberately before
-   applying a secret change. Bootstrap will reject a mismatch. These code changes do not
-   update existing AWS stacks automatically. If the eight-hour environments have
-   expired, recreate them only when ready for AWS testing, within the total budget.
-2. **Select a published release:** download its archive and AWS metadata from a
-   successful CI run and validate their checksums and source SHA. Reuse the recorded
-   repository digests for all environments.
-3. **Run database preparation:** register `migration.yaml` with those values,
-   then run `BootstrapTaskDefinitionArn` in the environment's task subnets/security
-   group with public IP enabled. Wait for the `bootstrap` container to exit zero.
-   Then run `MigrationTaskDefinitionArn` and require the `migrate` container's exit
-   code to be zero. Registering a task definition does not execute it. Serialize
-   deployments per environment; concurrent bootstrap operations are unsupported.
-4. **Connect deployment and promotion workflows:** update `application.yaml` with
-   the same image digests, wait for the service to stabilize, and run smoke tests
-   from a permitted network location. Keep UAT and PROD promotion under human
-   control. Tag app and migration stacks with `Project=delivery-lab`,
-   `Purpose=academic-lab` and `ParentStackId=<foundation StackId>` so expiry can
-   remove the application, migration and bootstrap definitions safely.
+### Trigger, runner and access
 
-The application service defaults to `DesiredCount=0` so registering definitions
-does not start unprepared containers. After bootstrap and migrations pass, the
-future deployment workflow must explicitly set it to `1` (or `2`). This does not
-avoid the cost of foundation resources such as RDS and the load balancer.
+`deploy-dev.yml` follows a completed **CI** run, but only proceeds when that run
+succeeded, was a push to `main`, and belongs to this repository. It skips an older
+release if `main` has already advanced. It downloads `release-<SHA>` and
+`aws-release-<SHA>` from the triggering run, not from an unrelated/latest run.
 
-ECS rollback is configured for failed service deployments. The first deployment
-has no previously successful application revision to restore. Later application
-rollbacks do not undo database migrations, so schema compatibility and recovery
-must be handled separately. Human UAT/PROD decisions and successful-release
-evidence remain workflow responsibilities; these templates do not implement them.
+The existing `[self-hosted, delivery-lab]` Mac runner still controls deployment.
+It needs Python 3.10+, AWS CLI v2, GitHub CLI, internet access, and its runner
+service online. **The deployed application runs in AWS**, not on the runner.
+This deployment job does not use Docker or Docker Compose. Keeping this runner
+also lets the existing public IPv4 restriction protect the load balancer without
+opening it to arbitrary GitHub-hosted runner addresses.
+
+Create a GitHub environment named **aws-dev**, with a custom deployment branch
+rule permitting only **main** and no required reviewer for this automatic DEV
+stage. Apply the updated access stack, then set its environment variable
+`AWS_DEV_ROLE_ARN` to the `DevRoleArn` output. The account and region use the
+repository variables established in step 4. GitHub authenticates through OIDC;
+the `aws-dev` environment subject and main-only environment rule work together.
+The credentials action clears existing credential environment variables first,
+and the helper checks that the actual caller is the temporary GitHub DEV role.
+No personal AWS keys need to be configured in the workflow.
+
+The DEV role can read the foundation, verify ECR images, apply the two DEV child
+stacks through the existing CloudFormation execution role, and run/inspect the
+DEV database tasks. It cannot directly read Secrets Manager values or publish
+images. The child templates execute with the shared CloudFormation service role,
+so review infrastructure changes before merging into `main`. Deployment and
+infrastructure workflows share a concurrency group to serialize lab operations.
+
+### Deployment sequence and gates
+
+`scripts/deploy_aws_dev.py` performs these steps:
+
+1. Validate the full source SHA, repository/CI run, account/region, archive and
+   manifest checksums, expected repositories and both immutable image references.
+2. Require a ready, owned DEV foundation with at least an hour before its existing
+   cleanup deadline. Verify the runner's public IPv4 matches `AllowedClientCidr`.
+   Missing/expired foundations fail clearly; deployments never provision or extend
+   a session automatically. The restricted HTTP baseline is supported; a configured
+   certificate requires adding a matching hostname to the smoke-test configuration.
+3. Compare the ECR tag's digest with the published metadata. For an OCI index,
+   resolve its single Linux/amd64 image for the later running-container check.
+4. Apply the archived `migration.yaml` through CloudFormation. Run its bootstrap
+   task and require an explicit zero exit code, then run Flyway and require zero.
+   Both use the already published backend image. Only bootstrap receives the RDS
+   administrator secret; Flyway receives APP credentials. The job never reads them.
+5. Apply the archived `application.yaml`, using both recorded image digests and
+   `DesiredCount=1`. Wait for ECS to finish the requested deployment, then verify
+   the healthy running task's definition and both image digests. A rollback to a
+   previous task definition does not count as success for the requested release.
+6. Run the existing smoke tests through the load balancer: health, frontend HTML,
+   matching frontend/backend release and environment, input validation, and real
+   Oracle create/list/delete. The fictional test record is removed.
+7. Record success only after every gate passes. The workflow uploads
+   `aws-dev-<SHA>` containing `aws-dev-receipt.json`, with the CI source, image
+   digests, foundation identity, task identifiers, URL, expiry and completion time.
+   A failed attempt records `status: failed`; it cannot supply passed DEV evidence.
+
+Database tasks have a 15-minute deadline and are stopped on a caught wait failure.
+Both release stacks carry `ParentStackId` so cleanup can verify session ownership.
+The expiry Lambda deletes owned child stacks, stops any remaining standalone
+lab tasks, then deletes the foundation. The explicit infrastructure `delete`
+operation follows the same dependency order. Neither path rebuilds images or
+copies records between environments.
+
+ECS can roll back a failed service deployment if a previously completed deployment
+exists. It cannot roll back the first deployment, and application rollback does
+not undo database migrations. A later smoke-test failure blocks success evidence
+but does not automatically restore an older application; inspect the failure
+before retrying. A child stack in `ROLLBACK_COMPLETE` needs deliberate cleanup
+before CloudFormation can recreate it; the deployment helper does not delete it.
+
+### Start a short DEV session and inspect the result
+
+In **AWS infrastructure → Run workflow**, select `provision` and `dev`. Update
+its `AWS_CLIENT_CIDR` environment variable if the Mac's public IPv4 has changed.
+The selected foundation uses the smallest configured sizes and receives its own
+eight-hour deadline. UAT/PROD need not be provisioned for a DEV demonstration.
+
+After the foundation is ready, merge a PR so CI publishes a release and triggers
+Deploy DEV. If the latest release previously failed only because its foundation
+was absent, rerun that **Deploy DEV** run. The deployment summary contains the
+AWS application URL and cleanup time; access works from the permitted IPv4 only.
+Download the DEV receipt from the workflow's **Artifacts** section. It is retained
+for 30 days, while the actual environment remains temporary.
+
+A local integration check can use the same deployment helper with artifacts
+already downloaded from a successful main CI run:
+
+```bash
+python3 scripts/deploy_aws_dev.py --profile default \
+  --archive .download/release.tar.gz --metadata .download/aws-release.json \
+  --output .local/aws-dev-receipt.json --release FULL_COMMIT_SHA \
+  --repository swbergmann/fintech-app --ci-run-id CI_RUN_ID \
+  --account 637423555881 --region eu-west-1
+```
+
+This uses the local CLI profile; it does not test GitHub's OIDC exchange and does
+not upload its local receipt to GitHub. Keep local checks separate from the
+workflow evidence used for later automated promotion.
+
+### Remaining step: AWS UAT and PROD promotion
+
+`promote.yml` still targets locally installed releases and checks local DEV/UAT
+receipts. AWS DEV evidence cannot satisfy those local checks. The next step must
+adapt promotion to consume the same ECR digests, require successful AWS DEV before
+UAT, require successful UAT plus human acceptance before PROD, and validate the
+source workflow and environment/session identities. Local development and the
+original Compose demonstration remain available through the existing scripts.
 
 ## Access and provisioning procedure
 
@@ -399,8 +475,9 @@ aws cloudformation deploy --profile default --region eu-west-1 \
 If a GitHub OIDC provider already exists in the account, supply
 `ExistingOidcProviderArn` as well; the bootstrap must not create a duplicate.
 Only the account administrator updates this access stack. The GitHub infrastructure
-role cannot modify its own permissions or the access stack. It operates the four
-foundation/shared stacks through a dedicated CloudFormation service role. That
+role cannot modify its own permissions or the access stack. It operates the
+foundation/shared stacks through a dedicated CloudFormation service role and can
+delete owned release stacks during explicit cleanup. That
 role restricts named ECR/RDS/secrets/logging resources and IAM runtime roles; some
 network/ECS/ALB operations require broader regional permissions. It is not a
 blanket AWS administrator role. Use a dedicated lab account, and review these
@@ -421,17 +498,19 @@ Pull requests run static validation without AWS credentials. Pushes verify acces
 only manually dispatched operations on `main` provision or delete infrastructure.
 
 The **AWS infrastructure** workflow offers `status`, `provision` and `delete`.
-`provision` creates or updates the foundations and starts a new eight-hour session;
-`delete` requests early foundation deletion. Do not repeatedly provision just to
-check progress, because it extends the expiry. After application stacks are added,
-delete those first (or let the scheduled cleanup remove tagged children).
+`provision` creates or updates the selected foundations and starts a new eight-hour session;
+`delete` removes owned child stacks and leftover tasks before requesting foundation
+deletion. Do not repeatedly provision just to check progress, because it extends
+the expiry. The manual workflow defaults to provisioning DEV; choose `all` when
+all three environments are actually required. The CLI retains its `all` default,
+so pass `--environment dev` for a DEV-only session.
 
 The same helper can run locally without merging this branch:
 
 ```bash
 python3 infra/aws/provision.py verify --profile default --account 637423555881
 python3 infra/aws/provision.py provision --profile default --account 637423555881 \
-  --client-cidr YOUR_PUBLIC_IPV4/32
+  --client-cidr YOUR_PUBLIC_IPV4/32 --environment dev
 python3 infra/aws/provision.py status --profile default --account 637423555881
 # Only when intentionally ending a session and deleting its fictional data:
 python3 infra/aws/provision.py delete --profile default --account 637423555881
@@ -468,6 +547,9 @@ successful AWS deployment.
 ## Official references
 
 - [CloudFormation resource provisioning and templates](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html)
+- [GitHub workflow_run triggers](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
+- [ECS deployment circuit breaker and rollback](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html)
+- [ECS IAM actions and conditions](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html)
 - [CloudFormation linting and local validation](https://github.com/aws-cloudformation/cfn-lint)
 - [Fargate networking, public IPs and communication within a task](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html)
 - [ECS Secrets Manager injection and startup behaviour](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html)

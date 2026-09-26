@@ -48,11 +48,43 @@ class ProvisionSafetyTests(unittest.TestCase):
         value = datetime.fromisoformat(provision.expiry()).replace(tzinfo=timezone.utc)
         self.assertLess(abs((value - before).total_seconds()), 2)
 
+    def test_single_environment_provision_does_not_create_or_extend_other_environments(self):
+        aws = provision.Aws('123456789012')
+        aws.oracle_version = Mock(return_value='19.test')
+        aws.deploy = Mock()
+        aws.environment = Mock()
+        aws.describe = Mock(return_value={'Parameters': []})
+        aws.status = Mock()
+        aws.provision('8.8.8.8/32', ('dev',))
+        self.assertEqual([call.args[0] for call in aws.environment.call_args_list], ['dev'])
+        self.assertEqual([call.args[0] for call in aws.deploy.call_args_list], ['delivery-lab-shared', 'delivery-lab-dev'])
+
     def test_unowned_stack_cannot_be_deleted(self):
         aws = provision.Aws('123456789012')
         aws.describe = Mock(return_value={'StackId': 'existing', 'Tags': []})
         aws.call = Mock()
         with self.assertRaisesRegex(ValueError, 'ownership'):
+            aws.delete()
+        aws.call.assert_not_called()
+
+    def test_explicit_delete_checks_children_and_deletes_them_before_foundation(self):
+        aws = provision.Aws('123456789012')
+        stack = {'StackId': 'foundation', 'Tags': [{'Key': 'Project', 'Value': 'delivery-lab'},
+                                                  {'Key': 'Purpose', 'Value': 'academic-lab'}]}
+        child = {'StackId': 'app', 'Tags': [{'Key': 'ParentStackId', 'Value': 'foundation'}]}
+        aws.describe = Mock(side_effect=[stack, child, None, None, None])
+        aws.call = Mock()
+        aws.delete()
+        deleted = [call.args[3] for call in aws.call.call_args_list if call.args[1] == 'delete-stack']
+        self.assertEqual(deleted, ['app', 'foundation'])
+
+    def test_explicit_delete_rejects_a_foreign_child_before_deleting_anything(self):
+        aws = provision.Aws('123456789012')
+        stack = {'StackId': 'foundation', 'Tags': [{'Key': 'Project', 'Value': 'delivery-lab'},
+                                                  {'Key': 'Purpose', 'Value': 'academic-lab'}]}
+        aws.describe = Mock(side_effect=[stack, {'StackId': 'app', 'Tags': []}, None])
+        aws.call = Mock()
+        with self.assertRaisesRegex(ValueError, 'ParentStackId'):
             aws.delete()
         aws.call.assert_not_called()
 
@@ -114,6 +146,26 @@ class CleanupSafetyTests(unittest.TestCase):
         self.run_cleanup()
         self.assertEqual([call.kwargs['StackName'] for call in self.client.delete_stack.call_args_list],
                          ['app', 'migration', self.stack_id])
+
+    def test_cleanup_stops_leftover_database_tasks_before_deleting_foundation(self):
+        cluster = 'arn:aws:ecs:eu-west-1:123456789012:cluster/delivery-lab-dev'
+        self.stack['Outputs'] = [{'OutputKey': 'ClusterArn', 'OutputValue': cluster}]
+        self.module['describe'] = Mock(side_effect=[self.stack, None, None])
+        self.client.get_paginator.return_value.paginate.return_value = [{'taskArns': ['task']}]
+        self.client.describe_tasks.return_value = {'tasks': [{'taskArn': 'task', 'lastStatus': 'STOPPED'}]}
+        with patch.dict(os.environ, AWS_REGION='eu-west-1'):
+            self.run_cleanup()
+        self.client.stop_task.assert_called_once_with(cluster=cluster, task='task', reason='Approved eight-hour lab cleanup')
+        names = [call[0] for call in self.client.mock_calls]
+        self.assertLess(names.index('stop_task'), names.index('delete_stack'))
+
+    def test_cleanup_cannot_stop_tasks_in_a_different_cluster(self):
+        self.stack['Outputs'] = [{'OutputKey': 'ClusterArn', 'OutputValue': 'another-cluster'}]
+        self.module['describe'] = Mock(side_effect=[self.stack, None, None])
+        with patch.dict(os.environ, AWS_REGION='eu-west-1'), self.assertRaisesRegex(ValueError, 'Unexpected cleanup cluster'):
+            self.run_cleanup()
+        self.client.stop_task.assert_not_called()
+        self.client.delete_stack.assert_not_called()
 
 
 if __name__ == '__main__':

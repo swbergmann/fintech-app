@@ -280,6 +280,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - cloudformation:CreateChangeSet
+                  - cloudformation:TagResource
+                  - cloudformation:UntagResource
                   - cloudformation:DescribeChangeSet
                   - cloudformation:DeleteChangeSet
                   - cloudformation:ExecuteChangeSet
@@ -294,6 +296,24 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-dev/*'
                   - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-uat/*'
                   - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-prod/*'
+              - Effect: Allow
+                Action: [cloudformation:DescribeStacks, cloudformation:DeleteStack]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-dev-app/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-dev-migration/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-uat-app/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-uat-migration/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-prod-app/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-prod-migration/*'
+              - Effect: Allow
+                Action: ecs:ListTasks
+                Resource: '*'
+                Condition:
+                  ArnLike:
+                    ecs:cluster: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ProjectName}-*'
+              - Effect: Allow
+                Action: [ecs:StopTask, ecs:DescribeTasks]
+                Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${ProjectName}-*/*'
               - Effect: Allow
                 Action: [cloudformation:ValidateTemplate, cloudformation:GetTemplateSummary, rds:DescribeDBEngineVersions, rds:DescribeOrderableDBInstanceOptions]
                 Resource: '*'
@@ -349,6 +369,88 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}/frontend'
                   - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}/backend'
 
+  GitHubDevRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-github-dev'
+      MaxSessionDuration: 7200
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateProvider, !Ref GitHubProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub '${GitHubSubjectPrefix}:environment:aws-dev'
+      Policies:
+        - PolicyName: deploy-dev-release
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:TagResource
+                  - cloudformation:UntagResource
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-dev-app/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-dev-migration/*'
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-dev/*'
+              - Effect: Allow
+                Action: [cloudformation:ValidateTemplate, cloudformation:GetTemplateSummary]
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}/runtime/${ProjectName}-dev-*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}/bootstrap/${ProjectName}-dev-migration-*'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Effect: Allow
+                Action: ecr:BatchGetImage
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}/frontend'
+                  - !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}/backend'
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}-dev-migration-bootstrap:*'
+                  - !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${ProjectName}-dev-migration-migrate:*'
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ProjectName}-dev'
+              - Effect: Allow
+                Action: [ecs:DescribeTasks, ecs:StopTask]
+                Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${ProjectName}-dev/*'
+              - Effect: Allow
+                Action: ecs:DescribeServices
+                Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ProjectName}-dev/*'
+              - Effect: Allow
+                Action: ecs:ListTasks
+                Resource: '*'
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ProjectName}-dev'
+
   CleanupRole:
     Type: AWS::IAM::Role
     Properties:
@@ -373,6 +475,15 @@ Resources:
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !GetAtt CleanupLogs.Arn
+              - Effect: Allow
+                Action: ecs:ListTasks
+                Resource: '*'
+                Condition:
+                  ArnLike:
+                    ecs:cluster: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ProjectName}-*'
+              - Effect: Allow
+                Action: [ecs:StopTask, ecs:DescribeTasks]
+                Resource: !Sub 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${ProjectName}-*/*'
   CleanupLogs:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -400,6 +511,7 @@ Resources:
           from botocore.exceptions import ClientError
 
           cfn = boto3.client('cloudformation')
+          ecs = boto3.client('ecs')
 
           def describe(name):
               try:
@@ -443,6 +555,32 @@ Resources:
                       if context.get_remaining_time_in_millis() < 45000:
                           raise TimeoutError('Retry after child deletion completes')
                       time.sleep(15)
+              # A cancelled deployment can leave a standalone bootstrap/migration
+              # task running. Services are already gone; stop remaining lab tasks
+              # before deleting the cluster and database foundation.
+              outputs = {item['OutputKey']: item['OutputValue'] for item in stack.get('Outputs', [])}
+              cluster = outputs.get('ClusterArn')
+              if cluster:
+                  expected_cluster = 'arn:aws:ecs:' + os.environ['AWS_REGION'] + ':' + os.environ['ACCOUNT'] + ':cluster/' + name
+                  if cluster != expected_cluster:
+                      raise ValueError('Unexpected cleanup cluster')
+                  tasks = []
+                  for page in ecs.get_paginator('list_tasks').paginate(cluster=cluster, desiredStatus='RUNNING'):
+                      tasks.extend(page['taskArns'])
+                  for task in tasks:
+                      ecs.stop_task(cluster=cluster, task=task, reason='Approved eight-hour lab cleanup')
+                  while tasks:
+                      remaining = []
+                      for index in range(0, len(tasks), 100):
+                          result = ecs.describe_tasks(cluster=cluster, tasks=tasks[index:index + 100])
+                          if result.get('failures'):
+                              raise RuntimeError('Could not verify stopped lab tasks')
+                          remaining.extend(task['taskArn'] for task in result['tasks'] if task['lastStatus'] != 'STOPPED')
+                      tasks = remaining
+                      if tasks:
+                          if context.get_remaining_time_in_millis() < 45000:
+                              raise TimeoutError('Retry after standalone tasks stop')
+                          time.sleep(10)
               cfn.delete_stack(StackName=stack['StackId'])
               print('Deletion requested for', name)
               return {'status': 'deletion requested', 'stack': name}
@@ -478,6 +616,8 @@ Resources:
                 Resource: !GetAtt CleanupFunction.Arn
 
 Outputs:
+  DevRoleArn:
+    Value: !GetAtt GitHubDevRole.Arn
   ReleaseRoleArn:
     Value: !GetAtt GitHubReleaseRole.Arn
   BootstrapBoundaryArn:

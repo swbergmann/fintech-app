@@ -99,22 +99,24 @@ class Aws:
         self.deploy(name, 'environment.yaml', parameters)
         return name
 
-    def provision(self, cidr):
+    def provision(self, cidr, environments=ENVIRONMENTS):
+        if not environments or any(env not in ENVIRONMENTS for env in environments):
+            raise ValueError('Select dev, uat, prod or all environments.')
         cidr = client_cidr(cidr)
         version = self.oracle_version()
-        print(f'Oracle {version}; three db.t3.small instances, 20 GiB each, Single-AZ.', flush=True)
+        print(f'Oracle {version}; {len(environments)} db.t3.small instance(s), 20 GiB each, Single-AZ.', flush=True)
         self.deploy(f'{PROJECT}-shared', 'shared.yaml', {'ProjectName': PROJECT})
         # Schedule creation is part of each foundation, even if this process stops.
         initial_expiry = expiry()
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = [pool.submit(self.environment, env, cidr, version, initial_expiry)
-                       for env in ENVIRONMENTS]
+                       for env in environments]
             for future in futures:
                 future.result()
-        # Give the user a full eight hours after all three foundations are ready.
+        # Give the user a full eight hours after the selected foundations are ready.
         # Updates preserve all other parameters and resources.
         final_expiry = expiry()
-        for env in ENVIRONMENTS:
+        for env in environments:
             stack = self.describe(f'{PROJECT}-{env}')
             parameters = {item['ParameterKey']: item['ParameterValue'] for item in stack['Parameters']}
             parameters['ExpiresAt'] = final_expiry
@@ -134,8 +136,7 @@ class Aws:
                               'outputs': outputs}, indent=2), flush=True)
 
     def delete(self):
-        # For foundations only. The scheduled Lambda additionally handles future
-        # app/migration stacks with matching ParentStackId ownership tags.
+        # Remove owned release stacks first so their imports do not block deletion.
         for env in ENVIRONMENTS:
             name = f'{PROJECT}-{env}'
             stack = self.describe(name)
@@ -144,6 +145,22 @@ class Aws:
             tags = {tag['Key']: tag['Value'] for tag in stack.get('Tags', [])}
             if tags.get('Project') != PROJECT or tags.get('Purpose') != 'academic-lab':
                 raise ValueError(f'Refusing to delete {name}: expected ownership tags are missing.')
+            children = [child for suffix in ('-app', '-migration') if (child := self.describe(name + suffix))]
+            for child in children:
+                child_tags = {tag['Key']: tag['Value'] for tag in child.get('Tags', [])}
+                if child_tags.get('ParentStackId') != stack['StackId']:
+                    raise ValueError('Refusing to delete a child without matching ParentStackId.')
+            for child in children:
+                self.call('cloudformation', 'delete-stack', '--stack-name', child['StackId'], '--role-arn', self.role)
+                self.call('cloudformation', 'wait', 'stack-delete-complete', '--stack-name', child['StackId'])
+            cluster = f'arn:aws:ecs:{self.region}:{self.account}:cluster/{name}'
+            if any(o['OutputKey'] == 'ClusterArn' for o in stack.get('Outputs', [])):
+                tasks = self.call('ecs', 'list-tasks', '--cluster', cluster, '--desired-status', 'RUNNING')['taskArns']
+                for task in tasks:
+                    self.call('ecs', 'stop-task', '--cluster', cluster, '--task', task,
+                              '--reason', 'Explicit Delivery Lab environment deletion')
+                for index in range(0, len(tasks), 100):
+                    self.call('ecs', 'wait', 'tasks-stopped', '--cluster', cluster, '--tasks', *tasks[index:index + 100])
             self.call('cloudformation', 'delete-stack', '--stack-name', stack['StackId'],
                       '--role-arn', self.role)
             print(f'{name}: deletion requested (asynchronous)', flush=True)
@@ -156,13 +173,15 @@ def main():
     parser.add_argument('--region', default='eu-west-1', choices=['eu-west-1'])
     parser.add_argument('--profile')
     parser.add_argument('--client-cidr', help='Your public IPv4/32; required for provision.')
+    parser.add_argument('--environment', choices=['all', *ENVIRONMENTS], default='all',
+                        help='Foundations to create/refresh during provision; default: all.')
     args = parser.parse_args()
     aws = Aws(args.account, args.region, args.profile)
     aws.verify()
     if args.action == 'provision':
         if not args.client_cidr:
             parser.error('--client-cidr is required for provision')
-        aws.provision(args.client_cidr)
+        aws.provision(args.client_cidr, ENVIRONMENTS if args.environment == 'all' else (args.environment,))
     elif args.action == 'status':
         aws.status()
     elif args.action == 'delete':
