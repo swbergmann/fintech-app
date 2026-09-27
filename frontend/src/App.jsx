@@ -54,7 +54,7 @@ export default function App() {
   return (
     <main>
       <header className="masthead">
-        <span className="brand">DELIVERY LAB</span>
+        <span className="brand">MY SUSTAINABLE RESTAURANT APP</span>
         <span className="environment">{meta?.environment ?? 'CONNECTING'}</span>
       </header>
       <div className="heading">
@@ -84,7 +84,7 @@ export default function App() {
             </li>)}</ul>}
         </section>
       </div>
-      <footer>Local case study demo · Each environment stores its own records.</footer>
+      <footer>ABC Services · Each environment stores its own records.</footer>
     </main>
   );
 }
