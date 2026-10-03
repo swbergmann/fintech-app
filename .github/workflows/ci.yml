@@ -119,7 +119,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
           role-session-name: release-${{ github.run_id }}
-      - name: Build missing images once, publish and verify digests
+      - name: Build and publish images, then record ECR digest
         env:
           AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
           AWS_REGION: ${{ vars.AWS_REGION }}
@@ -136,14 +136,14 @@ jobs:
           retention-days: 30
           if-no-files-found: error
           overwrite: true
-      - name: Summarize stored images
-        run: |
-          python3 - <<'PY'
-          import json, os
-          release = json.load(open('aws-release.json'))
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write(f"Release `{release['release']}` is stored in ECR.\n\n")
-              for service, image in release['images'].items():
-                  summary.write(f"- {service}: `{image['uri']}`\n")
-              summary.write('\nDownload **aws-release.json** from this run’s AWS release artifact.\n')
-          PY
+      # - name: Summarize stored images
+      #   run: |
+      #     python3 - <<'PY'
+      #     import json, os
+      #     release = json.load(open('aws-release.json'))
+      #     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+      #         summary.write(f"Release `{release['release']}` is stored in ECR.\n\n")
+      #         for service, image in release['images'].items():
+      #             summary.write(f"- {service}: `{image['uri']}`\n")
+      #         summary.write('\nDownload **aws-release.json** from this run’s AWS release artifact.\n')
+      #     PY
