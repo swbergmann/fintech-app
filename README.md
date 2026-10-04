@@ -9,7 +9,7 @@ describes disposable foundations, ECR publication, automatic **AWS DEV** deploym
 and manual **AWS UAT/PROD** promotion, plus controlled application recovery.
 The [final transition demonstration](docs/aws-transition.md) records the end-to-end
 checks, human acceptance, live evidence and remaining limitations.
-The existing Mac Actions runner controls CloudFormation/ECS and runs smoke tests;
+GitHub-hosted Ubuntu runners control CloudFormation/ECS and run smoke tests;
 the frontend/backend run on Fargate, and Oracle runs on RDS. DEV must be explicitly
 provisioned for an eight-hour session, as must each promotion target.
 
@@ -102,7 +102,7 @@ Replace `YOUR_RELEASE_ID` with the printed value. GitHub releases use the full c
 | `tests/` | Failure and success cases for the release process |
 | `docs/` | Setup, case study exercises, and validation results |
 
-Generated passwords, installed releases, and deployment receipts stay in `.local/` by default and are excluded from Git. A GitHub runner must use a persistent directory outside its checkout, configured through `LAB_HOME`.
+For the local demonstration, generated passwords, installed releases, and deployment receipts stay in `.local/` by default and are excluded from Git; `LAB_HOME` can select a persistent directory outside the checkout. AWS workflows download release artifacts and upload deployment receipts to GitHub, so they do not require persistent runner storage or a running Mac.
 
 ## Validation
 

@@ -1,6 +1,6 @@
 # GitHub setup
 
-**Migration status:** Deploy DEV and Promote release now target AWS. This guide retains the original local demonstration and acceptance checklist; use [the AWS guide](../infra/aws/README.md#controlled-aws-uat-and-prod-promotion-step-6) for current workflow inputs, evidence gates and environment setup.
+**Migration status:** Deploy DEV, Promote release and Recover deployment now target AWS using GitHub-hosted Ubuntu runners; no local Actions runner is required. This guide retains the original local demonstration and acceptance checklist, including historical runner setup; use [the AWS guide](../infra/aws/README.md#controlled-aws-uat-and-prod-promotion-step-6) for current workflow inputs, evidence gates and environment setup.
 
 This project is ready to push; no repository or account connection has been created for you. You can test locally before configuring GitHub.
 
@@ -16,7 +16,7 @@ git remote add origin YOUR_GITHUB_REPOSITORY_URL
 git push -u origin main
 ```
 
-The first push runs **CI**. **Deploy DEV** may wait for a local runner until step 3 is complete. Do not upload `.local/`, passwords, `node_modules`, or `target`; the included `.gitignore` excludes them.
+The first push runs **CI**. Current AWS deployment workflows use GitHub-hosted runners and require the access and infrastructure setup in the AWS guide; the historical local runner setup below is no longer required. Do not upload `.local/`, passwords, `node_modules`, or `target`; the included `.gitignore` excludes them.
 
 ## 2. Configure review of main
 
@@ -60,7 +60,7 @@ For the first demonstration, commit and push the feature branch, open a PR, and 
 
 The promotion-rule test step remains commented out for the current case-study stage. Only the new security-gate tests run through `python3 -m unittest discover -s tests -p test_codeql.py -v`. The local demo script does not run CodeQL; the security scan runs on GitHub's hosted CI runner.
 
-## 3. Connect a local deployment runner
+## 3. Original local deployment runner setup (historical)
 
 GitHub's hosted runners perform builds and tests. A **self-hosted runner** is a small GitHub program on your computer that receives deployment jobs and operates your local Docker engine. Your computer must be awake, online, and running Docker and the runner. No inbound internet port is needed for GitHub to dispatch jobs.
 

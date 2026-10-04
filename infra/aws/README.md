@@ -402,11 +402,13 @@ succeeded, was a push to `main`, and belongs to this repository. It skips an old
 release if `main` has already advanced. It downloads `release-<SHA>` and
 `aws-release-<SHA>` from the triggering run, not from an unrelated/latest run.
 
-The existing `[self-hosted, delivery-lab]` Mac runner still controls deployment.
-It needs Python 3.10+, AWS CLI v2, GitHub CLI, internet access, and its runner
-service online. **The deployed application runs in AWS**, not on the runner.
-This deployment job does not use Docker or Docker Compose. The runner needs
-internet access, but no fixed public IP address.
+Deployment runs on a GitHub-hosted `ubuntu-24.04` runner, which includes Python,
+AWS CLI v2 and GitHub CLI. **The deployed application runs in AWS**, not on the
+runner. This deployment job does not use Docker or Docker Compose, and no fixed
+public IP address is required. Release artifacts and deployment evidence are
+transferred through GitHub Actions, so no persistent Mac runner is needed.
+Local development and the Docker Compose demonstration remain available.
+[Runner software](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md).
 
 Create a GitHub environment named **aws-dev**, with a custom deployment branch
 rule permitting only **main** and no required reviewer for this automatic DEV
@@ -502,9 +504,9 @@ workflow evidence used for later automated promotion.
 ### Select a release and its evidence
 
 **Promote release** (`.github/workflows/promote.yml`) is a manual, main-branch
-workflow. It runs the same Python deployment engine as DEV on the existing Mac
-runner. The target is AWS ECS/Fargate and RDS; Docker Compose remains a local
-option through `scripts/lab.py`, not the GitHub promotion workflow.
+workflow. It runs the same Python deployment engine as DEV on a GitHub-hosted
+`ubuntu-24.04` runner. The target is AWS ECS/Fargate and RDS; Docker Compose
+remains a local option through `scripts/lab.py`, not the GitHub promotion workflow.
 
 | Input | UAT deployment | PROD deployment |
 |---|---|---|
@@ -640,9 +642,9 @@ test still needs investigation and an explicit recovery decision.
 [Source: AWS circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
 
 The new **Recover deployment** workflow (`recover.yml`) provides that manual path.
-It reuses the existing Mac runner, GitHub OIDC environments and environment-specific
-roles. No new instances, role variables, image builds or long-lived credentials
-are required. It shares `delivery-lab-aws` concurrency with deployment and
+It runs on a GitHub-hosted `ubuntu-24.04` runner and reuses the GitHub OIDC
+environments and environment-specific roles. No new instances, role variables,
+image builds or long-lived credentials are required. It shares `delivery-lab-aws` concurrency with deployment and
 infrastructure operations. Keep the environment's original eight-hour deadline;
 recovery never provisions, extends or recreates it.
 
