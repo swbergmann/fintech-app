@@ -39,7 +39,7 @@ concurrency:
 jobs:
   recover:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, delivery-lab]
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     environment: aws-${{ inputs.environment }}
     permissions:

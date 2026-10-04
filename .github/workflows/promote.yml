@@ -34,7 +34,7 @@ concurrency:
 jobs:
   promote:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, delivery-lab]
+    runs-on: ubuntu-24.04
     timeout-minutes: 65
     environment: aws-${{ inputs.environment }}
     permissions:

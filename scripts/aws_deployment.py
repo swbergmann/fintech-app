@@ -246,7 +246,7 @@ def main():
     parser.add_argument('--region', default='eu-west-1', choices=['eu-west-1'])
     parser.add_argument('--profile')
     parser.add_argument('--require-role', choices=['delivery-lab-github-dev'],
-                        help='In GitHub, reject ambient personal credentials on the self-hosted runner.')
+                        help='In GitHub, require the temporary DEV role rather than personal credentials.')
     args = parser.parse_args()
     receipt = {'status': 'failed', 'environment': 'dev', 'release': args.release}
     # Invalidate a previous receipt before any operation can fail.
