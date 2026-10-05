@@ -54,11 +54,11 @@ export default function App() {
   return (
     <main>
       <header className="masthead">
-        <span className="brand">MY SUSTAINABLE RESTAURANT APP</span>
+        <span className="brand">ABC SERVICES · SUSTAINABILITY</span>
         <span className="environment">{meta?.environment ?? 'CONNECTING'}</span>
       </header>
       <div className="heading">
-        <div><h1>Customer register</h1><p>A small workspace for fictional customer records.</p></div>
+        <div><h1>Customer register</h1><p>Manage fictional customers for ABC Services’ sustainability projects.</p></div>
         {meta && <p className="release">Release <code>{meta.release.slice(0, 12)}</code></p>}
       </div>
       {error && <p className="message error" role="alert">{error}</p>}
@@ -84,7 +84,7 @@ export default function App() {
             </li>)}</ul>}
         </section>
       </div>
-      <footer>ABC Services · Each environment stores its own records.</footer>
+      <footer>ABC Services · Sustainability services · Each environment stores its own records.</footer>
     </main>
   );
 }
