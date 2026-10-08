@@ -54,7 +54,7 @@ export default function App() {
   return (
     <main>
       <header className="masthead">
-        <span className="brand">ABC SERVICES · SUSTAINABILITY</span>
+        <span className="brand">ABC SERVICES · RESTAURANT SUSTAINABILITY</span>
         <span className="environment">{meta?.environment ?? 'CONNECTING'}</span>
       </header>
       <div className="heading">
